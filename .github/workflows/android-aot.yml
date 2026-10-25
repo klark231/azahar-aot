@@ -47,7 +47,7 @@ jobs:
       - name: Apply the patches (MH4U Android patch, then the CRO observer for the AOT backend, then the Vulkan bandwidth options)
         working-directory: azahar
         run: |
-          for p in ../repo/mh4u/port/azahar/azahar-android.patch ../repo/patches/0002-ldr-ro-cro-observer.patch ../repo/patches/0003-vulkan-mobile-bandwidth.patch; do
+          for p in ../repo/mh4u/port/azahar/azahar-android.patch ../repo/patches/0002-ldr-ro-cro-observer.patch ../repo/patches/0003-vulkan-mobile-bandwidth.patch ../repo/patches/0004-vulkan-wait-stats-pools-shadow.patch; do
             if git apply --check "$p" 2>/dev/null; then
               git apply "$p" && echo "applied $p"
             elif git apply --reverse --check "$p" 2>/dev/null; then
