@@ -55,6 +55,13 @@ struct Config {
     /// a game hangs or an input feels late.
     bool aot_skip_idle = true;
     bool aot_fewer_unwinds = true;
+    /// Vulkan: RGBA8 surfaces without storage usage / mutable format (needs patches/0003), which
+    /// can let a phone GPU keep framebuffer compression. Costs shadow-texture effects, if the
+    /// game uses any: the log says "Shadow ... without storage usage". Env AZAHAR_VK_NO_STORAGE.
+    bool vk_no_storage = false;
+    /// Vulkan: draws in a render pass before its end is flushed (Mali/Qualcomm); 0 = Azahar's 20.
+    /// Env AZAHAR_VK_FLUSH_DRAWS.
+    int vk_flush_draws = 0;
     std::string texture_filter = "none";    ///< none, bicubic, scaleforce, xbrz, mmpx, anime4k
     std::string texture_sampling = "game";  ///< game, nearest, linear
     std::string shader;               ///< a post-processing shader, empty: none

@@ -243,6 +243,17 @@ fun DisplayPage() = Page {
             fewerUnwinds = it; Prefs.setBool("Display", "aot_fewer_unwinds", it)
         }
         RowDivider()
+        var noStorage by remember { mutableStateOf(Prefs.getBool("Display", "vk_no_storage", false)) }
+        ToggleRow("Lighter surfaces (GPU bandwidth)", "Experimental: Vulkan surfaces without storage usage, which lets Adreno/Mali GPUs compress them. Shadow-texture effects may go missing. Applies the next time the game starts.", noStorage) {
+            noStorage = it; Prefs.setBool("Display", "vk_no_storage", it)
+        }
+        RowDivider()
+        var flushDraws by remember { mutableStateOf(Prefs.getApp("Display", "vk_flush_draws", "0")) }
+        ChoiceRow("Pass flush threshold", "Draws in a render pass before the GPU is kicked (Mali/Adreno). Compare on your phone; applies the next time the game starts.",
+            listOf("Default (20)" to "0", "8" to "8", "40" to "40", "100" to "100"), flushDraws) {
+            flushDraws = it; Prefs.setApp("Display", "vk_flush_draws", it)
+        }
+        RowDivider()
         var texFilter by remember { mutableStateOf(Prefs.getApp("Display", "texture_filter", "none")) }
         ChoiceRow("Texture filter", "Smooths low-resolution textures. The heavier ones cost speed.",
             listOf("None" to "none", "Bicubic" to "bicubic", "ScaleForce" to "scaleforce", "xBRZ" to "xbrz", "MMPX" to "mmpx", "Anime4K" to "anime4k"), texFilter) {
