@@ -55,10 +55,11 @@ struct Config {
     /// a game hangs or an input feels late.
     bool aot_skip_idle = true;
     bool aot_fewer_unwinds = true;
-    /// Vulkan: RGBA8 surfaces without storage usage / mutable format (needs patches/0003), which
-    /// can let a phone GPU keep framebuffer compression. Costs shadow-texture effects, if the
-    /// game uses any: the log says "Shadow ... without storage usage". Env AZAHAR_VK_NO_STORAGE.
-    bool vk_no_storage = false;
+    /// Vulkan: RGBA8 surfaces without storage usage / mutable format (needs patches/0003 and
+    /// 0005), which can let a phone GPU keep framebuffer compression. off: Azahar's own;
+    /// lighter: no shadow-texture effects at all; shadows: lighter, and a surface a shadow needs
+    /// is replaced by one with storage. Env AZAHAR_VK_NO_STORAGE (0, 1 or 2).
+    std::string vk_no_storage = "off";
     /// Vulkan: draws in a render pass before its end is flushed (Mali/Qualcomm); 0 = Azahar's 20.
     /// Env AZAHAR_VK_FLUSH_DRAWS.
     int vk_flush_draws = 0;

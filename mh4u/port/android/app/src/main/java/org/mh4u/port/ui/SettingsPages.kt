@@ -243,9 +243,16 @@ fun DisplayPage() = Page {
             fewerUnwinds = it; Prefs.setBool("Display", "aot_fewer_unwinds", it)
         }
         RowDivider()
-        var noStorage by remember { mutableStateOf(Prefs.getBool("Display", "vk_no_storage", false)) }
-        ToggleRow("Lighter surfaces (GPU bandwidth)", "Experimental: Vulkan surfaces without storage usage, which lets Adreno/Mali GPUs compress them. Shadow-texture effects may go missing. Applies the next time the game starts.", noStorage) {
-            noStorage = it; Prefs.setBool("Display", "vk_no_storage", it)
+        var noStorage by remember {
+            mutableStateOf(when (Prefs.getApp("Display", "vk_no_storage", "off").lowercase()) {
+                "shadows", "2" -> "shadows"
+                "lighter", "on", "1", "yes", "true" -> "lighter"
+                else -> "off"
+            })
+        }
+        ChoiceRow("Lighter surfaces (GPU bandwidth)", "Experimental, Vulkan only: surfaces without storage usage, which lets Adreno/Mali GPUs compress them. \"No shadows\" drops shadow effects completely. \"With shadows\" keeps them: a surface a shadow needs is rebuilt once with storage (a short hitch the first time). Applies the next time the game starts.",
+            listOf("Off (Azahar default)" to "off", "Lighter, no shadows" to "lighter", "Lighter, with shadows" to "shadows"), noStorage) {
+            noStorage = it; Prefs.setApp("Display", "vk_no_storage", it)
         }
         RowDivider()
         var flushDraws by remember { mutableStateOf(Prefs.getApp("Display", "vk_flush_draws", "0")) }

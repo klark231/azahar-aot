@@ -126,7 +126,12 @@ Config Load() {
     c.disable_right_eye = flag("Display", "disable_right_eye", c.disable_right_eye);
     c.aot_skip_idle = flag("Display", "aot_skip_idle", c.aot_skip_idle);
     c.aot_fewer_unwinds = flag("Display", "aot_fewer_unwinds", c.aot_fewer_unwinds);
-    c.vk_no_storage = flag("Display", "vk_no_storage", c.vk_no_storage);
+    {
+        // off / lighter / shadows; the older on/off setting still works (on = lighter)
+        const std::string m = str("Display", "vk_no_storage", c.vk_no_storage);
+        c.vk_no_storage = (m == "shadows" || m == "2") ? "shadows"
+                          : (m == "lighter" || IsOn(m)) ? "lighter" : "off";
+    }
     c.vk_flush_draws = num("Display", "vk_flush_draws", c.vk_flush_draws, 0, 1000);
     c.texture_filter = str("Display", "texture_filter", c.texture_filter);
     c.texture_sampling = str("Display", "texture_sampling", c.texture_sampling);
@@ -282,8 +287,9 @@ aot_skip_idle = {}
 # the AOT backend answers GetSystemTick without unwinding the code's call stack (needs a library
 # built with RECOMP_INLINE_SVC=1, others ignore it); off to rule it out
 aot_fewer_unwinds = {}
-# Vulkan (needs the Azahar patch 0003): RGBA8 surfaces without storage usage, for GPU
-# framebuffer compression; shadow-texture effects may go missing
+# Vulkan (needs the Azahar patches 0003 and 0005): RGBA8 surfaces without storage usage, for GPU
+# framebuffer compression. off = Azahar's own; lighter = no shadow-texture effects at all;
+# shadows = lighter, with the shadows kept
 vk_no_storage = {}
 # draws in a render pass before it is flushed on Mali/Qualcomm; 0 = Azahar's default (20)
 vk_flush_draws = {}
@@ -343,7 +349,7 @@ catalog_url = {}
                        OnOff(c.vsync), c.screens, OnOff(c.linear_filter), OnOff(c.custom_textures),
                        c.shader, c.fps_counter, OnOff(c.accurate_mul), OnOff(c.async_shaders),
                        OnOff(c.disk_shader_cache), OnOff(c.skip_duplicate_frames), c.texture_filter,
-                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), OnOff(c.vk_no_storage), c.vk_flush_draws, c.volume, c.audio_output, c.controller_auto ? "auto" : "off", keys,
+                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.volume, c.audio_output, c.controller_auto ? "auto" : "off", keys,
                        params, c.touch_screen_key, c.fullscreen_key, c.fps_counter_key, c.nickname, c.join, c.password,
                        c.host, c.room_port, c.room_name, c.room_members, c.lobby, c.token,
                        OnOff(c.room_public), c.last_room, c.catalog_url);
@@ -362,8 +368,10 @@ void SetEnv(const char* name, const char* value) {
 void Apply(const Config& c) {
     // read once by the Vulkan backend when the renderer starts (patches/0003); an environment
     // variable set from outside still works when the setting is off
-    if (c.vk_no_storage) {
+    if (c.vk_no_storage == "lighter") {
         SetEnv("AZAHAR_VK_NO_STORAGE", "1");
+    } else if (c.vk_no_storage == "shadows") {
+        SetEnv("AZAHAR_VK_NO_STORAGE", "2");
     }
     if (c.vk_flush_draws > 0) {
         SetEnv("AZAHAR_VK_FLUSH_DRAWS", std::to_string(c.vk_flush_draws).c_str());
