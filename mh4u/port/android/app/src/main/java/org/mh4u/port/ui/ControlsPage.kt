@@ -68,7 +68,7 @@ fun ControlsPage(onEditOverlay: (() -> Unit)? = null, onOverlayChanged: () -> Un
             if (devices.isEmpty()) Hint("No gamepad or keyboard connected. The on-screen controls always work.")
             else devices.forEach { Text("•  $it", fontSize = 14.sp, modifier = Modifier.padding(vertical = 2.dp)) }
             Spacer(Modifier.height(6.dp))
-            Hint("Any controller or keyboard Android lists works: Bluetooth, USB or built in. A binding can name one device, so two pads can do different things.")
+            Hint("Any controller or keyboard recognised by Android is supported (Bluetooth, USB or built in). A binding can be tied to one device, so two controllers can perform different actions.")
         }
 
         SectionTitle("3DS buttons")
@@ -87,7 +87,7 @@ fun ControlsPage(onEditOverlay: (() -> Unit)? = null, onOverlayChanged: () -> Un
                     Column(Modifier.weight(1f)) {
                         Text(name, fontSize = 15.sp)
                         Text(
-                            if (busy) "Hold the key or button, then let go…"
+                            if (busy) "Hold the key or button, then release…"
                             else mine.joinToString("   |   ") { it.text }.ifEmpty { "not bound" },
                             color = if (busy) Mh4uColors.Amber else Mh4uColors.TextDisabled, fontSize = 12.sp,
                         )
@@ -106,38 +106,38 @@ fun ControlsPage(onEditOverlay: (() -> Unit)? = null, onOverlayChanged: () -> Un
         Panel {
             var dead by remember { mutableFloatStateOf(Prefs.getInt("Controls", "deadzone", 12).toFloat()) }
             var press by remember { mutableFloatStateOf(Prefs.getInt("Controls", "press_point", 50).toFloat()) }
-            SliderRow("Stick dead zone", "How far a stick must move before the game feels it. Raise it if the picture drifts with the stick at rest.", dead, 0f..40f, " %") {
+            SliderRow("Stick dead zone", "How far a stick must move before input registers. Increase this if the image drifts while the stick is at rest.", dead, 0f..40f, " %") {
                 dead = it; Prefs.setApp("Controls", "deadzone", it.toInt().toString())
             }
-            SliderRow("Trigger press point", "How far a trigger or d-pad axis goes before it counts as pressed. Lower for light triggers.", press, 20f..90f, " %") {
+            SliderRow("Trigger press point", "How far a trigger or D-pad axis must travel to count as pressed. Lower this for light triggers.", press, 20f..90f, " %") {
                 press = it; Prefs.setApp("Controls", "press_point", it.toInt().toString())
             }
         }
 
         SectionTitle("Turbo")
         Panel {
-            Hint("Hold Turbo (bind it above, or add a Turbo button on screen: Edit layout > Show it, or a combo with \"Stay pressed until tapped again\" to leave it on) and the buttons picked here pulse instead of staying down.")
+            Hint("While Turbo is held, the buttons selected here pulse instead of staying pressed. Bind Turbo above, add an on-screen Turbo button (Edit layout > Show it), or create a combo with \"Stay pressed until tapped again\" to keep it on.")
             Spacer(Modifier.height(8.dp))
             var turbo by remember { mutableIntStateOf(Prefs.turboButtons) }
             FlowChips(turbo, MH4UInput.padButtons) { turbo = it; Prefs.turboButtons = it }
             var rate by remember { mutableFloatStateOf(Prefs.turboRate.toFloat()) }
-            SliderRow("Presses a second", "The game reads its buttons about 30 times a second: 7 or 8 gives clean presses.", rate, 2f..15f, "", steps = 12) {
+            SliderRow("Presses per second", "The game polls its buttons about 30 times per second. A value of 7 or 8 produces clean presses.", rate, 2f..15f, "", steps = 12) {
                 rate = it.roundToInt().toFloat(); Prefs.turboRate = rate.toInt()
             }
         }
 
         SectionTitle("Combos")
         Panel {
-            Hint("One key or button pressing several 3DS buttons at once, or several held together pressing one. Pick the 3DS buttons, then hold the input.")
+            Hint("Maps one key or button to several 3DS buttons at once, or several held inputs to one button. Select the 3DS buttons, then hold the input.")
             Spacer(Modifier.height(8.dp))
             FlowChips(comboMask) { comboMask = it }
             Spacer(Modifier.height(8.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (comboListening) {
-                    Text("Hold the input, then let go…", color = Mh4uColors.Amber, modifier = Modifier.weight(1f))
+                    Text("Hold the input, then release…", color = Mh4uColors.Amber, modifier = Modifier.weight(1f))
                     QuietButton("Cancel") { MH4UInput.cancelLearn(); comboListening = false }
                 } else {
-                    Text(if (comboMask == 0) "No buttons picked" else MH4UInput.maskName(comboMask), modifier = Modifier.weight(1f), fontSize = 14.sp)
+                    Text(if (comboMask == 0) "No buttons selected" else MH4UInput.maskName(comboMask), modifier = Modifier.weight(1f), fontSize = 14.sp)
                     AmberButton("Bind combo", enabled = comboMask != 0) { listeningFor = null; comboListening = true }
                 }
             }
@@ -172,7 +172,7 @@ fun ControlsPage(onEditOverlay: (() -> Unit)? = null, onOverlayChanged: () -> Un
             if (onEditOverlay != null) {
                 Spacer(Modifier.height(6.dp))
                 AmberButton("Edit layout and combo buttons", Modifier.fillMaxWidth()) { onEditOverlay() }
-            } else Hint("Layout and combo buttons are edited in the game: menu > Controls > Edit layout.")
+            } else Hint("Edit the layout and combo buttons in the game: menu > Controls > Edit layout.")
         }
         Spacer(Modifier.height(24.dp))
     }

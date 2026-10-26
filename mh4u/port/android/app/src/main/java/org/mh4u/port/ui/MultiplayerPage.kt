@@ -37,10 +37,10 @@ fun MultiplayerPage() {
         SectionTitle("You")
         Panel {
             var nick by remember { mutableStateOf(Prefs.getApp("Multiplayer", "nickname", "")) }
-            TextRow("Nickname", "4 to 20 letters, digits, spaces, '.', '_' or '-'. Empty: the console's user name.", nick) {
+            TextRow("Nickname", "4 to 20 characters: letters, digits, spaces, '.', '_' or '-'. Leave empty to use the console's user name.", nick) {
                 nick = it; if (it.isEmpty() || Native.validNickname(it)) Prefs.setApp("Multiplayer", "nickname", it)
             }
-            if (nick.isNotEmpty() && !Native.validNickname(nick)) Text("This nickname isn't accepted by rooms.", color = Mh4uColors.Notice, fontSize = 12.sp)
+            if (nick.isNotEmpty() && !Native.validNickname(nick)) Text("Rooms do not accept this nickname.", color = Mh4uColors.Notice, fontSize = 12.sp)
         }
 
         if (status.optString("error").isNotEmpty()) {
@@ -65,7 +65,7 @@ private fun RoomPanel(context: Context, s: JSONObject) {
         Hint("${s.optString("host")}:${s.optInt("port")}  ·  ${s.optJSONArray("members")?.length() ?: 0} / ${s.optInt("slots")} players")
         if (s.optBoolean("joined_in_game")) {
             Spacer(Modifier.height(8.dp))
-            Hint("You joined while the game runs: go to the game's multiplayer menu and look for the room's quest board.")
+            Hint("You joined while the game is running. Open the game's multiplayer menu and look for the room's quest board.")
         }
         val members = s.optJSONArray("members")
         if (members != null) {
@@ -79,7 +79,7 @@ private fun RoomPanel(context: Context, s: JSONObject) {
                         if (game.isNotEmpty()) Hint(game)
                     }
                     val heard = m.optDouble("heard", -1.0)
-                    Hint(if (heard < 0) "no game traffic yet" else "heard %.0f s ago".format(heard))
+                    Hint(if (heard < 0) "No game traffic yet" else "Last heard %.0f s ago".format(heard))
                 }
             }
         }
@@ -105,7 +105,7 @@ private fun RoomPanel(context: Context, s: JSONObject) {
             }
             if (addresses != null && addresses.length() > 1) {
                 RowDivider()
-                Hint("Addresses friends can reach this phone at:")
+                Hint("Addresses friends can use to reach this device:")
                 for (i in 0 until addresses.length()) {
                     val a = addresses.getJSONObject(i)
                     Text("${a.optString("ip")}  (${a.optString("kind")})", fontSize = 13.sp)
@@ -185,7 +185,7 @@ internal fun ChatSettingsPanel() {
             font = 12f; lines = 5f; bg = 60f; btnOpacity = 60f; btnSize = 44f
             for ((k, v) in listOf("font_size" to 12, "max_lines" to 5, "bg_opacity" to 60, "button_opacity" to 60, "button_size" to 44)) Prefs.setApp("Chat", k, v.toString())
         }
-        Hint("Shows in the game within a second of closing Settings.")
+        Hint("Changes appear in the game within a second of closing Settings.")
     }
 }
 

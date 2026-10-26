@@ -86,15 +86,15 @@ fun GamePage() = Page {
     SectionTitle("Speed")
     Panel {
         var fps by remember { mutableStateOf(Prefs.getGame("fps", "60").toFloatOrNull() ?: 60f) }
-        SliderRow("Frame rate cap", "The game runs at 30 on a 3DS; its speed stays right at any rate. Above 60 a busy scene may need a higher CPU clock.",
+        SliderRow("Frame rate cap", "The game runs at 30 fps on a 3DS; game speed stays correct at any cap. Above 60 fps, demanding scenes may need a higher CPU clock.",
             fps, 30f..120f, " fps", steps = 17) { fps = it; Prefs.setGame("fps", it.toInt().toString()) }
         RowDivider()
         var clock by remember { mutableStateOf(Prefs.getInt("Game", "cpu_clock", 100).toFloat()) }
-        SliderRow("CPU clock", "Applies the next time the game starts.", clock, 50f..400f, " %", steps = 6) {
+        SliderRow("CPU clock", "Applies on the next game start.", clock, 50f..400f, " %", steps = 6) {
             clock = it; Prefs.setApp("Game", "cpu_clock", it.toInt().toString())
         }
         RowDivider()
-        GameToggle("Online sync (net_sync)", "net_sync", true, "Keeps players of a room in step.")
+        GameToggle("Online sync (net_sync)", "net_sync", true, "Keeps the players in a room synchronised.")
     }
 
     SectionTitle("Picture")
@@ -102,11 +102,11 @@ fun GamePage() = Page {
         GameChoice("Top screen shape", "widescreen", "16:9",
             listOf("16:9", "16:10", "21:9", "32:9", "4:3", "Off").map { it to it.lowercase() })
         RowDivider()
-        GameToggle("Draw the wide picture itself", "wide_render", true, "Off stretches a 400×240 one.", "1", "0")
+        GameToggle("Native widescreen rendering", "wide_render", true, "When off, a 400×240 image is stretched.", "1", "0")
         RowDivider()
-        GameToggle("HUD to the screen's edges", "hud_edges", true, "Moves health, stamina and the party list out to the sides.", "1", "0")
+        GameToggle("HUD at screen edges", "hud_edges", true, "Moves the health, stamina and party list to the sides of the screen.", "1", "0")
         RowDivider()
-        GameToggle("Dither", "dither", false, "Off for a clean picture above 1× resolution.")
+        GameToggle("Dither", "dither", false, "Disable for a cleaner image above 1× resolution.")
         RowDivider()
         GameChoice("Stereoscopic 3D", "stereo_3d", "off", listOf("Off" to "off", "On" to "on"))
         RowDivider()
@@ -133,17 +133,17 @@ fun GamePage() = Page {
         var kick by remember { mutableStateOf(Prefs.getGame("kick", "off")) }
         var target by remember { mutableStateOf(Prefs.getGame("target", "off")) }
         var skip by remember { mutableStateOf(Prefs.getGame("skip", "ZR")) }
-        ChoiceRow("Kick", "The touch screen's kick panel, on a button.", PAD_BUTTONS_OR_OFF, kick) { kick = it; Prefs.setGame("kick", it) }
+        ChoiceRow("Kick", "Assigns the touch screen's kick panel to a button.", PAD_BUTTONS_OR_OFF, kick) { kick = it; Prefs.setGame("kick", it) }
         RowDivider()
         ChoiceRow("Target camera", null, PAD_BUTTONS_OR_OFF, target) { target = it; Prefs.setGame("target", it) }
         RowDivider()
-        ChoiceRow("Skip", "Skips the scene of the monster's end.", PAD_BUTTONS_OR_OFF, skip) { skip = it; Prefs.setGame("skip", it) }
+        ChoiceRow("Skip", "Skips the monster's finishing scene.", PAD_BUTTONS_OR_OFF, skip) { skip = it; Prefs.setGame("skip", it) }
         val shared = listOf(kick, target, skip).filter { it != "off" }.groupBy { it }.filter { it.value.size > 1 }.keys
-        if (shared.isNotEmpty()) Notice("${shared.joinToString()} is on more than one of these: they fire together. Give each its own button.")
+        if (shared.isNotEmpty()) Notice("${shared.joinToString()} is assigned to more than one action, so they trigger together. Assign a separate button to each.")
         RowDivider()
         GameChoice("End the wait (hold)", "skip_end", "ZL+ZR",
             listOf("ZL + ZR" to "ZL+ZR", "L + R" to "L+R", "START + SELECT" to "START+SELECT"),
-            "Held together to end the carving wait, as if it ran out.")
+            "Hold together to end the carving wait early, as if the timer had expired.")
         RowDivider()
         var hold by remember { mutableStateOf(Prefs.getGame("skip_end_hold", "1.0").toFloatOrNull() ?: 1f) }
         SliderRow("Hold time", null, hold, 0.5f..3f, " s", steps = 4) { hold = it; Prefs.setGame("skip_end_hold", "%.1f".format(it)) }
@@ -162,7 +162,7 @@ private fun TouchOverlayEditor() {
     var opacity by remember { mutableStateOf(parts.getOrNull(2)?.toFloatOrNull() ?: 85f) }
     fun save() = Prefs.setGame("touch_overlay", if (corner == "off") "off" else "$corner ${size.toInt()} ${opacity.toInt()}")
 
-    ChoiceRow("Corner", "Used by the Overlay screen layout: the game fills the screen and the touch screen sits in a corner.",
+    ChoiceRow("Corner", "Used by the Overlay screen layout, where the game fills the screen and the touch screen sits in a corner.",
         listOf("Top left" to "top-left", "Top right" to "top-right", "Bottom left" to "bottom-left",
             "Bottom right" to "bottom-right", "Off" to "off"), corner) { corner = it; save() }
     SliderRow("Height", null, size, 10f..70f, " %") { size = it; save() }
@@ -170,9 +170,9 @@ private fun TouchOverlayEditor() {
     RowDivider()
 
     // the quest's map and the target camera panel: "map 40 at 100 0", "on 12 at 100 30" or "off"
-    PanelEditor("Map in quests", "quest_overlay", "map", "map", "Shows only the map while a quest's panels are up.")
+    PanelEditor("Map in quests", "quest_overlay", "map", "map", "Shows only the map while the quest panels are displayed.")
     RowDivider()
-    PanelEditor("Target camera panel", "target_overlay", "on", "on", "A small view of the target camera, under the map.")
+    PanelEditor("Target camera panel", "target_overlay", "on", "on", "A small target-camera view, shown below the map.")
 }
 
 @Composable
@@ -194,8 +194,8 @@ private fun PanelEditor(title: String, key: String, default: String, onWord: Str
     }
     ToggleRow(title, hint, on) { on = it; save() }
     if (on) {
-        SliderRow("Height (0: as the touch screen)", null, height, 0f..70f, " %") { height = it; save() }
-        ToggleRow("Place it myself", "Across and down in % of the room the window leaves.", placed) { placed = it; save() }
+        SliderRow("Height (0 matches the touch screen)", null, height, 0f..70f, " %") { height = it; save() }
+        ToggleRow("Custom position", "Horizontal and vertical position, as a percentage of the available space.", placed) { placed = it; save() }
         if (placed) {
             SliderRow("Across", null, x, 0f..100f, " %") { x = it; save() }
             SliderRow("Down", null, y, 0f..100f, " %") { y = it; save() }
@@ -208,7 +208,7 @@ fun DisplayPage() = Page {
     SectionTitle("Screens")
     Panel {
         var screens by remember { mutableStateOf(Prefs.getApp("Display", "screens", "overlay")) }
-        ChoiceRow("Layout", "Overlay: the game fills the screen, the touch screen in a corner (Game > Touch screen over the game).",
+        ChoiceRow("Layout", "Overlay: the game fills the screen with the touch screen in a corner (see Game > Touch screen over the game).",
             listOf("Overlay" to "overlay", "Stacked" to "stacked", "Single screen" to "single",
                 "Side by side" to "side", "Large + small" to "large", "Hybrid" to "hybrid"), screens) {
             screens = it; Prefs.setApp("Display", "screens", it); Prefs.apply()
@@ -262,7 +262,7 @@ fun DisplayPage() = Page {
         }
         RowDivider()
         var cache by remember { mutableStateOf(Prefs.getBool("Display", "disk_shader_cache", true)) }
-        ToggleRow("Keep a shader cache on disk", "Improves smoothness on later launches. Applies on the next game start.", cache) {
+        ToggleRow("Disk shader cache", "Improves smoothness on later launches. Applies on the next game start.", cache) {
             cache = it; Prefs.setBool("Display", "disk_shader_cache", it)
         }
         RowDivider()
@@ -272,7 +272,7 @@ fun DisplayPage() = Page {
         }
         RowDivider()
         var noRight by remember { mutableStateOf(Prefs.getBool("Display", "disable_right_eye", false)) }
-        ToggleRow("Disable right eye render", "Skips the right-eye pass in Azahar's renderer. Keep this off when Game > Stereoscopic 3D is Off: the game already renders a single eye, and combining both can cause visible flicker.", noRight) {
+        ToggleRow("Disable right-eye rendering", "Skips the right-eye pass in Azahar's renderer. Keep this off when Game > Stereoscopic 3D is Off: the game already renders a single eye, and combining both can cause visible flicker.", noRight) {
             noRight = it; Prefs.setBool("Display", "disable_right_eye", it)
         }
         RowDivider()
@@ -346,6 +346,12 @@ fun AudioPage() = Page {
     Panel {
         var vol by remember { mutableStateOf(Prefs.getInt("Audio", "volume", 100).toFloat()) }
         SliderRow("Volume", null, vol, 0f..100f, " %") { vol = it; Prefs.setApp("Audio", "volume", it.toInt().toString()); Prefs.apply() }
+        RowDivider()
+        var audioDriver by remember { mutableStateOf(Prefs.getApp("Audio", "driver", "auto")) }
+        ChoiceRow("Audio driver", "AAudio is Android's low-latency audio path (Android 8.1 and newer); OpenSL ES is the older one. The driver can change audio latency and dropouts. Its effect on frame rate depends on the device, so compare using the frame counter. The driver in use is recorded in the log. Applies on the next game start.",
+            listOf("Automatic" to "auto", "AAudio" to "aaudio", "OpenSL ES" to "opensl"), audioDriver) {
+            audioDriver = it; Prefs.setApp("Audio", "driver", it)
+        }
     }
     Spacer(Modifier.height(24.dp))
 }

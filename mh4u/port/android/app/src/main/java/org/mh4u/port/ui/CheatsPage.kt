@@ -69,11 +69,11 @@ fun CheatsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
         SectionTitle("Cheats")
         Panel {
-            Hint("Gateway cheats for this game, saved to its cheat file as you change them. A cheat can crash the game or spoil a save: back the save up first. In a room, cheats that change the game's state can put you out of step with the others.")
+            Hint("Gateway cheats for this game, saved to its cheat file as you edit them. A cheat can crash the game or corrupt a save, so back up your save first. In a multiplayer room, cheats that change the game state can desynchronise you from the other players.")
         }
         Spacer(Modifier.height(8.dp))
         Panel {
-            if (cheats.isEmpty()) Hint("No cheats yet. Add one, or paste cheats in the usual [Name] form.")
+            if (cheats.isEmpty()) Hint("No cheats yet. Add one, or paste cheats in the standard [Name] format.")
             cheats.forEach { c ->
                 ToggleRow(c.name, c.comments.ifBlank { null }, c.enabled) { on ->
                     if (Native.cheatSetEnabled(c.index, on)) reload() else message = "Could not change the cheat."
@@ -102,7 +102,7 @@ fun CheatsPage() {
         CheatDialog(if (c.index < 0) "New cheat" else "Edit cheat", onDismiss = { edit = null }) {
             TextRow("Name", null, name) { name = it }
             TextRow("Note (optional)", null, comments) { comments = it }
-            TextRow("Code", "One Gateway line per row: 8 hex digits, a space, 8 hex digits.", code, multiline = true) { code = it }
+            TextRow("Code", "One Gateway code per line: 8 hex digits, a space, 8 hex digits.", code, multiline = true) { code = it }
             if (error.isNotEmpty()) Notice(error)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -119,7 +119,7 @@ fun CheatsPage() {
         var text by remember { mutableStateOf("") }
         var result by remember { mutableStateOf("") }
         CheatDialog("Paste cheats", onDismiss = { importing = false }) {
-            TextRow("Cheats", "As shared online: [Name] then the code lines. Several cheats at once are fine; they are added switched off.", text, multiline = true) { text = it }
+            TextRow("Cheats", "Standard format: [Name] followed by its code lines. Several cheats can be pasted at once; they are added disabled.", text, multiline = true) { text = it }
             if (result.isNotEmpty()) Notice(result)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -133,7 +133,7 @@ fun CheatsPage() {
                         if (why.isEmpty()) added++ else problems += "$n: $why"
                     }
                     reload()
-                    if (found.isEmpty()) result = "Found no cheat in that text."
+                    if (found.isEmpty()) result = "No cheats were found in the text."
                     else if (problems.isEmpty()) importing = false
                     else result = "Added $added. " + problems.joinToString(" ")
                     if (found.isNotEmpty() && problems.isEmpty()) message = "Added $added cheat" + if (added == 1) "." else "s."

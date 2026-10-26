@@ -80,6 +80,8 @@ struct Config {
     // [Audio]
     int volume = 100;                 ///< 0-100
     std::string audio_output = "auto";
+    /// Android: the audio driver cubeb uses: auto, aaudio, opensl. Read when a game starts.
+    std::string audio_driver = "auto";
 
     // [Controls]
     /// Per 3DS button (Settings::NativeButton) and stick (Settings::NativeAnalog): keyboard keys

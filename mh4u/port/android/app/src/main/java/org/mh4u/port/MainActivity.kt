@@ -88,7 +88,7 @@ class MainActivity : ComponentActivity() {
                 Text("Ready to play?", fontSize = 18.sp)
                 Spacer(Modifier.height(10.dp))
                 Check("Your game", gameOk, "Choose it in Setup")
-                Check("The port's code library", codeOk, "Without it the game runs on the emulator's own CPU: slow, and the port's options don't apply")
+                Check("Port code library", codeOk, "Without it, the game runs on the emulator's CPU, which is slower, and the port's options do not apply.")
                 Spacer(Modifier.height(14.dp))
                 AmberButton(if (gameOk) "Play" else "Set up first", Modifier.fillMaxWidth().height(52.dp)) {
                     val game = Prefs.gamePath
@@ -100,8 +100,8 @@ class MainActivity : ComponentActivity() {
             Panel {
                 val join = Prefs.getApp("Multiplayer", "join", "")
                 val host = Prefs.getInt("Multiplayer", "host", 0)
-                Text(when { join.isNotEmpty() -> "Joins $join when the game starts"; host > 0 -> "Hosts a room on port $host"; else -> "Solo: no room" }, fontSize = 14.sp)
-                Hint("Rooms can also be joined, hosted and left in the game: menu > Multiplayer.")
+                Text(when { join.isNotEmpty() -> "Joins $join when the game starts"; host > 0 -> "Hosts a room on port $host"; else -> "Solo play: no room" }, fontSize = 14.sp)
+                Hint("Rooms can also be joined, hosted or left during play from menu > Multiplayer.")
                 LastRoomResult()
             }
         }
@@ -143,14 +143,14 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 out
-            }.getOrElse { out.delete(); message = "Couldn't copy the file: ${it.message}"; null }
+            }.getOrElse { out.delete(); message = "The file could not be copied: ${it.message}"; null }
         }
 
         /** Copies the user folder to [target] and remembers it for the next start. */
         fun moveUserFolder(target: File): String {
             val old = Storage.root
-            if (target.canonicalPath == old.canonicalPath) return "That folder is already in use."
-            if (!(target.isDirectory || target.mkdirs()) || !target.canWrite()) return "Couldn't write to that folder."
+            if (target.canonicalPath == old.canonicalPath) return "This folder is already in use."
+            if (!(target.isDirectory || target.mkdirs()) || !target.canWrite()) return "The app cannot write to this folder."
             // the game's path is absolute: point it at the new place before the copy, so the copy carries it
             val oldGame = Prefs.gamePath
             val prefix = "!" + old.absolutePath
@@ -158,15 +158,15 @@ class MainActivity : ComponentActivity() {
             return runCatching {
                 old.copyRecursively(target, overwrite = false) { _, _ -> OnErrorAction.SKIP }
                 Storage.chooseRoot(target)
-                "Files copied to ${target.absolutePath}. Close the app completely and open it again to use that folder. The old copy is left where it was; delete it when everything works."
-            }.getOrElse { Prefs.gamePath = oldGame; "Couldn't copy the files: ${it.message}" }
+                "Files copied to ${target.absolutePath}. Fully close and reopen the app to use this folder. The original files were left in place; delete them once everything works."
+            }.getOrElse { Prefs.gamePath = oldGame; "The files could not be copied: ${it.message}" }
         }
 
         val pickFolder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
             val path = uri?.let { Storage.treeToPath(it) }
-            if (uri != null && path == null) message = "That folder can't be used. Pick one on the phone's storage or an SD card."
+            if (uri != null && path == null) message = "This folder cannot be used. Choose a folder on internal storage or an SD card."
             if (path != null) scope.launch {
-                busy = "Copying your files…"; progress = -1f; message = ""
+                busy = "Copying files…"; progress = -1f; message = ""
                 message = withContext(Dispatchers.IO) { moveUserFolder(File(path)) }
                 busy = ""
             }
@@ -174,7 +174,7 @@ class MainActivity : ComponentActivity() {
 
         fun askFolder() {
             if (!Storage.hasAllFilesAccess()) {
-                message = "Allow \"All files access\" for this app on the next screen, then come back and choose the folder again."
+                message = "Grant \"All files access\" to this app on the next screen, then return and choose the folder again."
                 ctx.startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:" + ctx.packageName)))
             } else pickFolder.launch(null)
         }
@@ -182,7 +182,7 @@ class MainActivity : ComponentActivity() {
         val pickGame = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             if (uri != null) scope.launch {
                 busy = "Copying the game…"; progress = 0f; message = ""
-                importTo(uri, Storage.games, null)?.let { Prefs.gamePath = "!" + it.absolutePath; message = "Game ready: ${it.name}" }
+                importTo(uri, Storage.games, null)?.let { Prefs.gamePath = "!" + it.absolutePath; message = "Game imported: ${it.name}" }
                 busy = ""; progress = -1f; changed()
             }
         }
@@ -190,7 +190,7 @@ class MainActivity : ComponentActivity() {
             if (uri != null) scope.launch {
                 busy = "Copying the code library…"; progress = 0f; message = ""
                 // the core looks for <program id>.so in aot/ (3dsrecomp's libraries)
-                importTo(uri, Storage.aot, "0004000000126300.so")?.let { message = "Code library ready" }
+                importTo(uri, Storage.aot, "0004000000126300.so")?.let { message = "Code library imported" }
                 busy = ""; progress = -1f; changed()
             }
         }
@@ -201,7 +201,7 @@ class MainActivity : ComponentActivity() {
                 if (file != null) {
                     val status = withContext(Dispatchers.IO) { Native.installCia("!" + file.absolutePath) }
                     file.delete()
-                    message = if (status == 0) "Update installed" else "The update didn't install (status $status)"
+                    message = if (status == 0) "Update installed" else "The update could not be installed (status $status)"
                 }
                 busy = ""
             }
@@ -220,31 +220,31 @@ class MainActivity : ComponentActivity() {
 
             SectionTitle("1 · Your game")
             Panel {
-                Check("Decrypted Monster Hunter 4 Ultimate (.3ds, .cci or .cxi)", gameOk, "Dump your own cartridge, decrypted (GodMode9 can).")
-                Hint("The app copies it into its own storage.")
+                Check("Decrypted Monster Hunter 4 Ultimate (.3ds, .cci or .cxi)", gameOk, "Dump your own cartridge in decrypted form (for example with GodMode9).")
+                Hint("The app copies the file into its own storage.")
                 Spacer(Modifier.height(8.dp))
-                AmberButton(if (gameOk) "Choose another" else "Choose the game", enabled = busy.isEmpty()) { pickGame.launch(arrayOf("*/*")) }
+                AmberButton(if (gameOk) "Choose another" else "Choose game", enabled = busy.isEmpty()) { pickGame.launch(arrayOf("*/*")) }
             }
-            SectionTitle("2 · The code library")
+            SectionTitle("2 · Code library")
             Panel {
-                Check("0004000000126300.so", codeOk, "Built on a PC from your own game; the app contains no game code.")
-                Hint("On a PC, with the Android NDK: port/android/build-code-library.sh makes the arm64 library from your dump. Copy it to this phone and choose it here.")
+                Check("0004000000126300.so", codeOk, "Built on a PC from your own game dump. The app contains no game code.")
+                Hint("On a PC with the Android NDK, run port/android/build-code-library.sh to build the arm64 library from your dump. Copy it to this device and select it here.")
                 Spacer(Modifier.height(8.dp))
-                AmberButton(if (codeOk) "Choose another" else "Choose the library", enabled = busy.isEmpty()) { pickCode.launch(arrayOf("*/*")) }
+                AmberButton(if (codeOk) "Choose another" else "Choose library", enabled = busy.isEmpty()) { pickCode.launch(arrayOf("*/*")) }
             }
-            SectionTitle("3 · The update (v1.3.0)")
+            SectionTitle("3 · Update (v1.3.0)")
             Panel {
-                Hint("The port targets the USA 1.3.0 update. Install its .cia once; skip this if it is installed already.")
+                Hint("The port targets the USA 1.3.0 update. Install its .cia once; skip this step if it is already installed.")
                 Spacer(Modifier.height(8.dp))
                 QuietButton("Install the update (.cia)", enabled = busy.isEmpty()) { pickCia.launch(arrayOf("*/*")) }
             }
             SectionTitle("Files")
             Panel {
                 Text(Storage.root.absolutePath, fontSize = 12.sp, color = Mh4uColors.TextDisabled)
-                Hint("Settings, saves and the user folder live here. mh4u-app.ini and mh4u.ini are the PC port's files and can be copied between the two.")
+                Hint("Settings, saves and the user folder are stored here. mh4u-app.ini and mh4u.ini use the same format as the PC port and can be copied between the two.")
                 Spacer(Modifier.height(8.dp))
-                QuietButton("Use a folder on this phone", enabled = busy.isEmpty()) { askFolder() }
-                Hint("Keeps your game, saves and settings where you can reach them, and they survive an uninstall. Needs \"All files access\".")
+                QuietButton("Use a folder on this device", enabled = busy.isEmpty()) { askFolder() }
+                Hint("Keeps the game, saves and settings in a folder you can access; they remain after the app is uninstalled. Requires \"All files access\".")
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -284,16 +284,16 @@ class MainActivity : ComponentActivity() {
         var host by remember { mutableStateOf(Prefs.getInt("Multiplayer", "host", 0)) }
         var nick by remember { mutableStateOf(Prefs.getApp("Multiplayer", "nickname", "")) }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
-            SectionTitle("The room the game starts with")
+            SectionTitle("Starting room")
             Panel {
                 LastRoomResult()
-                Hint("Set a room here and the game joins or hosts it when it starts. Once the game runs, its menu > Multiplayer joins, hosts and leaves rooms at any time.")
+                Hint("Set a room here and the game joins or hosts it at start. During play, menu > Multiplayer can join, host or leave rooms at any time.")
                 TextRow("Nickname", "Empty: the console's user name.", nick) { nick = it; if (it.isEmpty() || Native.validNickname(it)) Prefs.setApp("Multiplayer", "nickname", it) }
-                TextRow("Invite code or address to join", "mh4u://host:port, or host or host:port. Empty: not joining.", join) {
+                TextRow("Invite code or address to join", "mh4u://host:port, host or host:port. Leave empty to not join a room.", join) {
                     join = it; Prefs.setApp("Multiplayer", "join", it); if (it.isNotEmpty()) { host = 0; Prefs.setApp("Multiplayer", "host", "0") }
                 }
                 TextRow("Password (when the address has none)", null, password, password = true) { password = it; Prefs.setApp("Multiplayer", "password", it) }
-                ToggleRow("Host a room instead", "Friends join this phone's room, on the port below.", host > 0) {
+                ToggleRow("Host a room instead", "Friends join this device's room using the port below.", host > 0) {
                     host = if (it) Prefs.getInt("Multiplayer", "room_port", 24872) else 0
                     Prefs.setApp("Multiplayer", "host", host.toString()); if (it) { join = ""; Prefs.setApp("Multiplayer", "join", "") }
                 }

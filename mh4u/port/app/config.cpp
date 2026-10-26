@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <set>
 #include <string>
 #include <fmt/format.h>
 #include <INIReader.h>
@@ -143,6 +144,7 @@ Config Load() {
 
     c.volume = num("Audio", "volume", c.volume, 0, 100);
     c.audio_output = str("Audio", "output", c.audio_output);
+    c.audio_driver = str("Audio", "driver", c.audio_driver);
 
     for (int i = 0; i < NativeButton::NumButtons; ++i) {
         c.keys[i] = str("Controls", NativeButton::mapping[i], c.keys[i]);
@@ -308,6 +310,8 @@ gpu_driver = {}
 volume = {}
 # auto, or cubeb, sdl2, openal, null
 output = {}
+# Android audio driver (cubeb): auto, aaudio, opensl
+driver = {}
 
 [Controls]
 # controller = auto maps the first controller found like MH3U on a Wii U: the 3DS's A, B, X, Y
@@ -358,7 +362,7 @@ catalog_url = {}
                        OnOff(c.vsync), c.screens, OnOff(c.linear_filter), OnOff(c.custom_textures),
                        c.shader, c.fps_counter, OnOff(c.accurate_mul), OnOff(c.async_shaders),
                        OnOff(c.disk_shader_cache), OnOff(c.skip_duplicate_frames), c.texture_filter,
-                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.controller_auto ? "auto" : "off", keys,
+                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.audio_driver, c.controller_auto ? "auto" : "off", keys,
                        params, c.touch_screen_key, c.fullscreen_key, c.fps_counter_key, c.nickname, c.join, c.password,
                        c.host, c.room_port, c.room_name, c.room_members, c.lobby, c.token,
                        OnOff(c.room_public), c.last_room, c.catalog_url);
@@ -372,19 +376,35 @@ void SetEnv(const char* name, const char* value) {
     setenv(name, value, 1);
 #endif
 }
+
+void UnsetEnv(const char* name) {
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+/// Sets a variable the Azahar backend reads when a game starts. null: the setting is off, so a
+/// value this app set earlier is removed (the app lives on between games); a variable set from
+/// outside is left alone.
+void SyncEnv(const char* name, const char* value) {
+    static std::set<std::string> ours;
+    if (value) {
+        SetEnv(name, value);
+        ours.insert(name);
+    } else if (ours.erase(name) > 0) {
+        UnsetEnv(name);
+    }
+}
 } // namespace
 
 void Apply(const Config& c) {
-    // read once by the Vulkan backend when the renderer starts (patches/0003); an environment
-    // variable set from outside still works when the setting is off
-    if (c.vk_no_storage == "lighter") {
-        SetEnv("AZAHAR_VK_NO_STORAGE", "1");
-    } else if (c.vk_no_storage == "shadows") {
-        SetEnv("AZAHAR_VK_NO_STORAGE", "2");
-    }
-    if (c.vk_flush_draws > 0) {
-        SetEnv("AZAHAR_VK_FLUSH_DRAWS", std::to_string(c.vk_flush_draws).c_str());
-    }
+    // read by the Azahar backend each time a game starts (patches/0003, 0005, 0006)
+    SyncEnv("AZAHAR_VK_NO_STORAGE", c.vk_no_storage == "lighter" ? "1" : c.vk_no_storage == "shadows" ? "2" : nullptr);
+    const std::string flush_draws = std::to_string(c.vk_flush_draws);
+    SyncEnv("AZAHAR_VK_FLUSH_DRAWS", c.vk_flush_draws > 0 ? flush_draws.c_str() : nullptr);
+    SyncEnv("AZAHAR_CUBEB_BACKEND", c.audio_driver == "aaudio" ? "aaudio" : c.audio_driver == "opensl" ? "opensl" : nullptr);
     auto& v = Settings::values;
     if (c.renderer == "opengl") {
         v.graphics_api = Settings::GraphicsAPI::OpenGL;
