@@ -29,6 +29,14 @@ public:
     void OnTouch(int x, int y, bool down);
     void OnTouchMoved(int x, int y);
 
+    /// A Vulkan driver loaded from the app's own folder (libadrenotools); none: the system's.
+    void SetDriverLibrary(std::shared_ptr<Common::DynamicLibrary> library) {
+        driver_library = std::move(library);
+    }
+    std::shared_ptr<Common::DynamicLibrary> GetDriverLibrary() override {
+        return driver_library;
+    }
+
     void PollEvents() override {}
     void MakeCurrent() override {}
     void DoneCurrent() override {}
@@ -42,6 +50,7 @@ private:
 
     int width = 0;
     int height = 0;
+    std::shared_ptr<Common::DynamicLibrary> driver_library;
 };
 
 } // namespace Mh4uAndroid

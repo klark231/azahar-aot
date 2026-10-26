@@ -162,8 +162,6 @@ private fun OfflinePanels() {
         AmberButton("Host") { Native.roomHost(port.toIntOrNull() ?: 24872, name, slots.toInt(), pw, listed) }
     }
 
-    ChatSettingsPanel()
-
     SectionTitle("Lobby")
     LobbyPanel(onJoin = { host, p, pass -> Native.roomJoin(host, p, pass) })
 }

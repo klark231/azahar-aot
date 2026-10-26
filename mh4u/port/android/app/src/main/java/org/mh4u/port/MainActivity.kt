@@ -301,7 +301,6 @@ class MainActivity : ComponentActivity() {
                     it.filter(Char::isDigit).toIntOrNull()?.let { p -> host = p; Prefs.setApp("Multiplayer", "host", p.toString()); Prefs.setApp("Multiplayer", "room_port", p.toString()) }
                 }
             }
-            ChatSettingsPanel()
             SectionTitle("Lobby")
             LobbyPanel(onJoin = { h, p, pw ->
                 join = "$h:$p"; Prefs.setApp("Multiplayer", "join", join); Prefs.setApp("Multiplayer", "host", "0"); host = 0

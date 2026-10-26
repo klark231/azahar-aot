@@ -9,6 +9,13 @@ object Native {
     /** Once, before anything else. [privateDir]: where the code library is staged to run. */
     @JvmStatic external fun init(privateDir: String)
 
+    /** Where libadrenotools' hooks are and where the imported GPU drivers live (see GpuDrivers). */
+    @JvmStatic external fun setDriverDirs(hookLibDir: String, driversDir: String)
+    /** True on a phone with an Adreno GPU (the Adreno-only settings are shown only then). */
+    @JvmStatic external fun isAdreno(): Boolean
+    /** True on an Adreno phone that can load a custom Vulkan driver. */
+    @JvmStatic external fun supportsCustomDriver(): Boolean
+
     /** [width], [height]: the surface's size in pixels, as the activity knows it. */
     @JvmStatic external fun surfaceChanged(surface: Surface?, width: Int, height: Int)
     @JvmStatic external fun surfaceDestroyed()

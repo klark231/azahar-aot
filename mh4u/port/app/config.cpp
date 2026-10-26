@@ -133,6 +133,9 @@ Config Load() {
                           : (m == "lighter" || IsOn(m)) ? "lighter" : "off";
     }
     c.vk_flush_draws = num("Display", "vk_flush_draws", c.vk_flush_draws, 0, 1000);
+    c.cpu_affinity = str("Display", "cpu_affinity", c.cpu_affinity);
+    c.adreno_boost = flag("Display", "adreno_boost", c.adreno_boost);
+    c.gpu_driver = str("Display", "gpu_driver", c.gpu_driver);
     c.texture_filter = str("Display", "texture_filter", c.texture_filter);
     c.texture_sampling = str("Display", "texture_sampling", c.texture_sampling);
     c.shader = str("Display", "shader", c.shader);
@@ -293,6 +296,12 @@ aot_fewer_unwinds = {}
 vk_no_storage = {}
 # draws in a render pass before it is flushed on Mali/Qualcomm; 0 = Azahar's default (20)
 vk_flush_draws = {}
+# Android: default, big (big + prime cores), prime (the prime core only), little
+cpu_affinity = {}
+# Android, Adreno: keep the GPU clocked up (more power, warmer)
+adreno_boost = {}
+# Android, Adreno: an imported GPU driver's folder name, or system
+gpu_driver = {}
 
 [Audio]
 # 0-100
@@ -349,7 +358,7 @@ catalog_url = {}
                        OnOff(c.vsync), c.screens, OnOff(c.linear_filter), OnOff(c.custom_textures),
                        c.shader, c.fps_counter, OnOff(c.accurate_mul), OnOff(c.async_shaders),
                        OnOff(c.disk_shader_cache), OnOff(c.skip_duplicate_frames), c.texture_filter,
-                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.volume, c.audio_output, c.controller_auto ? "auto" : "off", keys,
+                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.controller_auto ? "auto" : "off", keys,
                        params, c.touch_screen_key, c.fullscreen_key, c.fps_counter_key, c.nickname, c.join, c.password,
                        c.host, c.room_port, c.room_name, c.room_members, c.lobby, c.token,
                        OnOff(c.room_public), c.last_room, c.catalog_url);

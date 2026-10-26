@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <condition_variable>
+#include <fstream>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -15,17 +17,25 @@
 #include <queue>
 #include <string>
 
+#include <android/api-level.h>
 #include <android/native_window_jni.h>
+#include <dlfcn.h>
+#include <unistd.h>
 #include <jni.h>
 #include <json.hpp>
+#ifdef MH4U_ADRENOTOOLS
+#include <adrenotools/driver.h>
+#endif
 
 #include "common/android_utils.h"
+#include "common/dynamic_library.h"
 #include "common/file_util.h"
 #include "common/logging/backend.h"
 #include "common/logging/filter.h"
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/thread.h"
 #include "config.h"
 #ifdef MH4U_AOT
 #include "arm_aot.h"
@@ -191,6 +201,116 @@ void ApplyScreenExtras(const std::string& text) {
     }
 }
 
+// ── Adreno GPU boost and custom Vulkan drivers (libadrenotools) ──
+std::string g_hook_lib_dir;   // the app's native library folder, where libadrenotools' hooks are
+std::string g_drivers_dir;    // <files>/gpu_drivers: one folder per driver, each with a meta.json
+std::shared_ptr<Common::DynamicLibrary> g_driver_library;
+std::string g_driver_wanted;  // what the first start in this process asked for
+bool g_driver_tried = false;
+std::string g_driver_marker;  // exists while a custom driver has not proven itself yet
+
+[[maybe_unused]] bool KgslPresent() {
+    return access("/dev/kgsl-3d0", F_OK) == 0;
+}
+
+bool CustomDriverSupported() {
+#ifdef MH4U_ADRENOTOOLS
+    return android_get_device_api_level() >= 28 && KgslPresent();
+#else
+    return false;
+#endif
+}
+
+void ClearDriverMarker() {
+    if (!g_driver_marker.empty()) {
+        unlink(g_driver_marker.c_str());
+        g_driver_marker.clear();
+    }
+}
+
+void SetAdrenoBoost(bool on) {
+#ifdef MH4U_ADRENOTOOLS
+    static bool active = false;
+    if (on == active) {
+        return;
+    }
+    if (on && !KgslPresent()) {
+        LOG_INFO(Frontend, "Adreno GPU boost: no Adreno GPU here, left off");
+        return;
+    }
+    adrenotools_set_turbo(on);
+    active = on;
+    LOG_INFO(Frontend, "Adreno GPU boost {}", on ? "on" : "off");
+#else
+    (void)on;
+#endif
+}
+
+/// The Vulkan library of the driver the player picked, or none for the system's. A custom driver
+/// can only be loaded once per process, so a change takes the next start of the app; a driver
+/// that crashed the last start is left out (until the player picks one again) so the app opens.
+std::shared_ptr<Common::DynamicLibrary> ChooseGpuDriver(const std::string& wanted_setting,
+                                                        std::string& note) {
+    const std::string wanted = wanted_setting == "system" ? std::string{} : wanted_setting;
+#ifdef MH4U_ADRENOTOOLS
+    if (g_driver_tried) {
+        if (wanted != g_driver_wanted) {
+            note = "The GPU driver change takes effect after the app is fully closed and reopened.";
+        }
+        return g_driver_library;
+    }
+    g_driver_tried = true;
+    g_driver_wanted = wanted;
+    if (wanted.empty()) {
+        return {};
+    }
+    if (!CustomDriverSupported() || g_drivers_dir.empty()) {
+        note = "This device cannot load custom GPU drivers (an Adreno GPU is required). The system driver is in use.";
+        return {};
+    }
+    const std::string folder = g_drivers_dir + "/" + wanted + "/";
+    const std::string marker = g_drivers_dir + "/.loading";
+    if (access(marker.c_str(), F_OK) == 0) {
+        note = "The custom GPU driver failed to start last time, so the system driver is in use. "
+               "Select the driver again in Settings to retry.";
+        LOG_WARNING(Frontend, "gpu driver: {} left a start marker, using the system driver", wanted);
+        return {};
+    }
+    std::string library_name;
+    try {
+        std::ifstream meta(folder + "meta.json");
+        library_name = json::parse(meta).value("libraryName", "");
+    } catch (const std::exception& e) {
+        LOG_WARNING(Frontend, "gpu driver {}: meta.json unreadable: {}", wanted, e.what());
+    }
+    if (library_name.empty() || access((folder + library_name).c_str(), R_OK) != 0) {
+        note = "The selected GPU driver is missing or incomplete. The system driver is in use.";
+        return {};
+    }
+    // a start that crashes leaves this behind (cleared when the game has run a while)
+    if (std::ofstream(marker).is_open()) {
+        g_driver_marker = marker;
+    }
+    void* handle = adrenotools_open_libvulkan(RTLD_NOW, ADRENOTOOLS_DRIVER_CUSTOM, nullptr,
+                                              g_hook_lib_dir.c_str(), folder.c_str(),
+                                              library_name.c_str(), nullptr, nullptr);
+    if (!handle) {
+        ClearDriverMarker();
+        note = "The GPU driver \"" + wanted + "\" could not be loaded. The system driver is in use.";
+        LOG_ERROR(Frontend, "gpu driver {}: adrenotools_open_libvulkan failed", wanted);
+        return {};
+    }
+    LOG_INFO(Frontend, "gpu driver: loaded {} ({})", wanted, library_name);
+    g_driver_library = std::make_shared<Common::DynamicLibrary>(handle);
+    return g_driver_library;
+#else
+    if (!wanted.empty()) {
+        note = "This build does not support custom GPU drivers.";
+    }
+    return {};
+#endif
+}
+
 /// The app's settings (mh4u-app.ini) as Azahar's, then what is Android's own. PC's Apply() does
 /// the common part (renderer, filter, clock, sound level, the input profile).
 void ApplyConfig(const App::Config& config) {
@@ -203,6 +323,12 @@ void ApplyConfig(const App::Config& config) {
     v.graphics_api = Settings::GraphicsAPI::Vulkan;   // the one renderer of this app
     v.output_type = AudioCore::SinkType::Cubeb;       // Cubeb's Android backend (AAudio)
     v.use_vsync = config.vsync;
+    // which cores the game's threads may run on (read when the game starts)
+    v.cpu_affinity_mode.SetValue(config.cpu_affinity == "big"      ? 1
+                                 : config.cpu_affinity == "prime"  ? 2
+                                 : config.cpu_affinity == "little" ? 3
+                                                                   : 0);
+    SetAdrenoBoost(config.adreno_boost);   // live: takes effect in a running game too
     // this Azahar counts the internal resolution in percent (100: native); the app's ini in
     // multiples of the 3DS's, 0 meaning from the screen
     v.resolution_factor = static_cast<u32>(config.resolution * 100);
@@ -249,6 +375,14 @@ Core::System::ResultStatus Run(const std::string& game, std::string& message) {
 
     g_config = App::Load();
     ApplyConfig(g_config);
+    SCOPE_EXIT({
+        SetAdrenoBoost(false);
+        ClearDriverMarker();
+    });
+    std::string driver_note;
+    if (auto library = ChooseGpuDriver(g_config.gpu_driver, driver_note)) {
+        g_window->SetDriverLibrary(std::move(library));   // the renderer asks its window for it
+    }
     Frontend::RegisterDefaultApplets(system);
     system.RegisterSoftwareKeyboard(std::make_shared<Mh4uAndroid::Keyboard>());
     system.ApplySettings();
@@ -260,7 +394,14 @@ Core::System::ResultStatus Run(const std::string& game, std::string& message) {
     {
         std::scoped_lock lock(g_notice_mutex);
         g_notice = Port::BackendNotice();  // the activity shows it once the game is up
+        if (!driver_note.empty()) {
+            g_notice += (g_notice.empty() ? "" : "\n") + driver_note;
+        }
     }
+
+    // pin this thread before the core starts its own: they take the mask from their creator
+    Common::SetCurrentThreadAffinity(
+        static_cast<Common::CpuAffinityMode>(Settings::values.cpu_affinity_mode.GetValue()));
 
     Settings::LogSettings();
     const auto status = system.Load(*g_window, game);
@@ -280,7 +421,12 @@ Core::System::ResultStatus Run(const std::string& game, std::string& message) {
         g_window.reset();
     });
 
+    // a custom driver that has run this long didn't crash on start
+    const auto driver_ok_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (!g_stop) {
+        if (!g_driver_marker.empty() && std::chrono::steady_clock::now() >= driver_ok_at) {
+            ClearDriverMarker();
+        }
         RunTasks();
         App::Multiplayer::Tick();
         if (g_pause) {
@@ -379,6 +525,25 @@ FN(void, init, jstring private_dir) {
     }
     App::Multiplayer::Init(Core::System::GetInstance(), g_config);
     g_initialised = true;
+}
+
+/// Where libadrenotools' hooks are (the app's native library folder) and where the GPU drivers
+/// the player imported live.
+FN(void, setDriverDirs, jstring hook_lib_dir, jstring drivers_dir) {
+    g_hook_lib_dir = Str(env, hook_lib_dir);
+    g_drivers_dir = Str(env, drivers_dir);
+}
+
+FN(jboolean, isAdreno) {
+#ifdef MH4U_ADRENOTOOLS
+    return KgslPresent();
+#else
+    return false;
+#endif
+}
+
+FN(jboolean, supportsCustomDriver) {
+    return CustomDriverSupported();
 }
 
 FN(void, surfaceChanged, jobject surface, jint width, jint height) {

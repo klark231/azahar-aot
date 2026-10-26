@@ -18,4 +18,7 @@ Places most likely to need a fix on the first compile or run, in order:
 5. **Rooms before the game**: `App::Multiplayer::StartAtBoot` joins/hosts from `mh4u-app.ini`
    (`join`, `host`) when the game starts, as on PC; the live Join/Host/Leave calls are only
    used while the game runs.
-6. **Vulkan**: system driver only (no custom driver loading, no Adreno hooks).
+6. **Vulkan**: the system driver unless the player imports one (Settings > Display > GPU
+   driver; libadrenotools, Adreno only). The Adreno GPU boost and the CPU core choice are there
+   too. First build: `adrenotools` must be a CMake target (Azahar's externals, arm64) and its hook
+   libraries must end up in the APK's native library folder (`extractNativeLibs` is on).

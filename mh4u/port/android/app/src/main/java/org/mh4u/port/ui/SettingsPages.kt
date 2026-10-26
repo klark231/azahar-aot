@@ -3,9 +3,15 @@ package org.mh4u.port.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.mh4u.port.GpuDrivers
 import org.mh4u.port.Native
 import org.mh4u.port.Prefs
 
@@ -21,6 +27,43 @@ private val PAD_BUTTONS = PAD_BUTTONS_OR_OFF.drop(1)
 @Composable
 private fun Page(content: @Composable ColumnScope.() -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp), content = content)
+}
+
+/** The GPU driver choice: the phone's own, or one imported from a .zip (Adreno phones only). */
+@Composable
+private fun GpuDriverRows() {
+    // Adreno phones only: nothing is shown on other chipsets
+    if (!Native.supportsCustomDriver()) return
+    RowDivider()
+    val scope = rememberCoroutineScope()
+    var drivers by remember { mutableStateOf(GpuDrivers.list()) }
+    var chosen by remember { mutableStateOf(Prefs.getApp("Display", "gpu_driver", "system")) }
+    var message by remember { mutableStateOf("") }
+    val import = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch {
+            message = "Importing driver…"
+            val result = withContext(Dispatchers.IO) { GpuDrivers.install(uri) }
+            drivers = GpuDrivers.list()
+            message = result.fold({ "Imported \"$it\". Select it in the list above." }, { it.message ?: "The file could not be imported." })
+        }
+    }
+    val options = listOf("System driver" to "system") + drivers.map { (it.name + if (it.version.isNotEmpty()) " (${it.version})" else "") to it.id }
+    ChoiceRow("GPU driver", "Loads an imported driver (for example a Turnip build) instead of the system driver. Fully close and reopen the app to apply a change. If a driver fails during startup, the app falls back to the system driver on the next launch.",
+        options, if (options.any { it.second == chosen }) chosen else "system") {
+        chosen = it
+        Prefs.setApp("Display", "gpu_driver", it)
+        GpuDrivers.clearCrashMarker()
+    }
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AmberButton("Import driver (.zip)") { import.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) }
+        QuietButton("Remove selected", enabled = chosen != "system" && drivers.any { it.id == chosen }) {
+            GpuDrivers.remove(chosen)
+            drivers = GpuDrivers.list()
+            chosen = "system"; Prefs.setApp("Display", "gpu_driver", "system")
+            message = "Driver removed."
+        }
+    }
+    if (message.isNotEmpty()) Hint(message)
 }
 
 /** A game option (mh4u.ini). */
@@ -179,7 +222,7 @@ fun DisplayPage() = Page {
         var swap by remember { mutableStateOf(Prefs.getBool("Android", "swap", false)) }
         ToggleRow("Swap screens", null, swap) { swap = it; Prefs.setBool("Android", "swap", it); Prefs.apply() }
         var upright by remember { mutableStateOf(Prefs.getBool("Android", "upright", false)) }
-        ToggleRow("Upright screens", "Turns the screens a quarter turn.", upright) { upright = it; Prefs.setBool("Android", "upright", it); Prefs.apply() }
+        ToggleRow("Upright screens", "Rotates the screens by a quarter turn.", upright) { upright = it; Prefs.setBool("Android", "upright", it); Prefs.apply() }
         var gap by remember { mutableStateOf(Prefs.getInt("Android", "gap", 0).toFloat()) }
         SliderRow("Gap between screens", null, gap, 0f..80f) { gap = it; Prefs.setApp("Android", "gap", it.toInt().toString()); Prefs.apply() }
         var large by remember { mutableStateOf(Prefs.getApp("Android", "large_proportion", "4").toFloatOrNull() ?: 4f) }
@@ -191,7 +234,7 @@ fun DisplayPage() = Page {
     SectionTitle("Picture")
     Panel {
         var res by remember { mutableStateOf(Prefs.getInt("Display", "resolution", 2).toFloat()) }
-        SliderRow("Internal resolution", "In multiples of the 3DS's. 0: as many as the screen needs.", res, 0f..6f, " ×", steps = 5) {
+        SliderRow("Internal resolution", "In multiples of the 3DS resolution. 0 matches the screen.", res, 0f..6f, " ×", steps = 5) {
             res = it; Prefs.setApp("Display", "resolution", it.toInt().toString()); Prefs.apply()
         }
         RowDivider()
@@ -200,11 +243,11 @@ fun DisplayPage() = Page {
         var vsync by remember { mutableStateOf(Prefs.getBool("Display", "vsync", true)) }
         ToggleRow("VSync", null, vsync) { vsync = it; Prefs.setBool("Display", "vsync", it); Prefs.apply() }
         var accMul by remember { mutableStateOf(Prefs.getBool("Display", "accurate_mul", false)) }
-        ToggleRow("Accurate shader math", "Off is faster on most phones; applies the next time the game starts.", accMul) {
+        ToggleRow("Accurate shader math", "Disabling this is faster on most phones. Applies on the next game start.", accMul) {
             accMul = it; Prefs.setBool("Display", "accurate_mul", it)
         }
         var tex by remember { mutableStateOf(Prefs.getBool("Display", "custom_textures", false)) }
-        ToggleRow("Custom textures", "Loads replacement textures from the user folder; applies the next time the game starts.", tex) {
+        ToggleRow("Custom textures", "Loads replacement textures from the user folder. Applies on the next game start.", tex) {
             tex = it; Prefs.setBool("Display", "custom_textures", it)
         }
         var fpsCounter by remember { mutableStateOf(Prefs.getApp("Display", "fps_counter", "off")) }
@@ -214,32 +257,32 @@ fun DisplayPage() = Page {
     SectionTitle("Advanced graphics")
     Panel {
         var asyncSh by remember { mutableStateOf(Prefs.getBool("Display", "async_shaders", true)) }
-        ToggleRow("Compile shaders in the background", "Stops the stutter when a new effect first appears; an effect can be missing for a moment. Applies the next time the game starts.", asyncSh) {
+        ToggleRow("Compile shaders in the background", "Prevents stutter when a new effect first appears; the effect may be briefly missing. Applies on the next game start.", asyncSh) {
             asyncSh = it; Prefs.setBool("Display", "async_shaders", it)
         }
         RowDivider()
         var cache by remember { mutableStateOf(Prefs.getBool("Display", "disk_shader_cache", true)) }
-        ToggleRow("Keep a shader cache on disk", "Makes later launches smoother. Applies the next time the game starts.", cache) {
+        ToggleRow("Keep a shader cache on disk", "Improves smoothness on later launches. Applies on the next game start.", cache) {
             cache = it; Prefs.setBool("Display", "disk_shader_cache", it)
         }
         RowDivider()
         var skipDup by remember { mutableStateOf(Prefs.getBool("Display", "skip_duplicate_frames", false)) }
-        ToggleRow("Skip repeated frames", "Saves work when the picture hasn't changed.", skipDup) {
+        ToggleRow("Skip repeated frames", "Reduces GPU work when the image has not changed.", skipDup) {
             skipDup = it; Prefs.setBool("Display", "skip_duplicate_frames", it)
         }
         RowDivider()
         var noRight by remember { mutableStateOf(Prefs.getBool("Display", "disable_right_eye", false)) }
-        ToggleRow("Disable right eye render", "Azahar's renderer skips the right eye's draws. Leave it off when Game > Stereoscopic 3D is Off: the game then draws one eye itself, and both together can make the picture twitch.", noRight) {
+        ToggleRow("Disable right eye render", "Skips the right-eye pass in Azahar's renderer. Keep this off when Game > Stereoscopic 3D is Off: the game already renders a single eye, and combining both can cause visible flicker.", noRight) {
             noRight = it; Prefs.setBool("Display", "disable_right_eye", it)
         }
         RowDivider()
         var skipIdle by remember { mutableStateOf(Prefs.getBool("Display", "aot_skip_idle", true)) }
-        ToggleRow("Skip idle loops", "The recompiled-code CPU skips the game's waiting loops, using less power. Turn it off if the game hangs or inputs feel late.", skipIdle) {
+        ToggleRow("Skip idle loops", "The recompiled CPU skips the game's busy-wait loops to reduce power use. Disable it if the game hangs or input feels delayed.", skipIdle) {
             skipIdle = it; Prefs.setBool("Display", "aot_skip_idle", it)
         }
         RowDivider()
         var fewerUnwinds by remember { mutableStateOf(Prefs.getBool("Display", "aot_fewer_unwinds", true)) }
-        ToggleRow("Fewer unwinds", "The recompiled-code CPU answers the game's constant clock reads (GetSystemTick) on the spot instead of leaving the code each time. Only a library built with RECOMP_INLINE_SVC=1 uses it. Turn it off if the game misbehaves.", fewerUnwinds) {
+        ToggleRow("Fewer unwinds", "Answers the game's frequent clock reads (GetSystemTick) in place instead of leaving the recompiled code each time. Requires a code library built with RECOMP_INLINE_SVC=1. Disable it if the game misbehaves.", fewerUnwinds) {
             fewerUnwinds = it; Prefs.setBool("Display", "aot_fewer_unwinds", it)
         }
         RowDivider()
@@ -250,19 +293,34 @@ fun DisplayPage() = Page {
                 else -> "off"
             })
         }
-        ChoiceRow("Lighter surfaces (GPU bandwidth)", "Experimental, Vulkan only: surfaces without storage usage, which lets Adreno/Mali GPUs compress them. \"No shadows\" drops shadow effects completely. \"With shadows\" keeps them: a surface a shadow needs is rebuilt once with storage (a short hitch the first time). Applies the next time the game starts.",
+        ChoiceRow("Lighter surfaces (GPU bandwidth)", "Experimental (Vulkan). Creates surfaces without storage usage so Adreno and Mali GPUs can compress them. \"No shadows\" disables shadow effects entirely. \"With shadows\" keeps them: a surface that needs storage is rebuilt once, which causes a brief hitch the first time. Applies on the next game start.",
             listOf("Off (Azahar default)" to "off", "Lighter, no shadows" to "lighter", "Lighter, with shadows" to "shadows"), noStorage) {
             noStorage = it; Prefs.setApp("Display", "vk_no_storage", it)
         }
         RowDivider()
         var flushDraws by remember { mutableStateOf(Prefs.getApp("Display", "vk_flush_draws", "0")) }
-        ChoiceRow("Pass flush threshold", "Draws in a render pass before the GPU is kicked (Mali/Adreno). Compare on your phone; applies the next time the game starts.",
+        ChoiceRow("Pass flush threshold", "Number of draw calls in a render pass before it is submitted to the GPU (Adreno and Mali). Results vary by device, so compare on your phone. Applies on the next game start.",
             listOf("Default (20)" to "0", "8" to "8", "40" to "40", "100" to "100"), flushDraws) {
             flushDraws = it; Prefs.setApp("Display", "vk_flush_draws", it)
         }
         RowDivider()
+        var affinity by remember { mutableStateOf(Prefs.getApp("Display", "cpu_affinity", "default")) }
+        ChoiceRow("CPU cores", "Controls which CPU cores the game's threads may use. \"Big + prime\" keeps them off the efficiency cores. \"Prime only\" places the game and the renderer on a single core, which can reduce performance. Applies on the next game start.",
+            listOf("Default (Android decides)" to "default", "Big + prime" to "big", "Prime only" to "prime", "Little only" to "little"), affinity) {
+            affinity = it; Prefs.setApp("Display", "cpu_affinity", it)
+        }
+        if (Native.isAdreno()) {
+            RowDivider()
+            var boost by remember { mutableStateOf(Prefs.getBool("Display", "adreno_boost", false)) }
+            ToggleRow("Adreno GPU boost", "Keeps the Adreno GPU at high clock speeds. Helps when the GPU is the bottleneck; increases power draw and heat.", boost) {
+                boost = it; Prefs.setBool("Display", "adreno_boost", it)
+            }
+        }
+        GpuDriverRows()   // Adreno only; draws its own divider
+        RowDivider()
+        RowDivider()
         var texFilter by remember { mutableStateOf(Prefs.getApp("Display", "texture_filter", "none")) }
-        ChoiceRow("Texture filter", "Smooths low-resolution textures. The heavier ones cost speed.",
+        ChoiceRow("Texture filter", "Upscales low-resolution textures. Heavier filters reduce performance.",
             listOf("None" to "none", "Bicubic" to "bicubic", "ScaleForce" to "scaleforce", "xBRZ" to "xbrz", "MMPX" to "mmpx", "Anime4K" to "anime4k"), texFilter) {
             texFilter = it; Prefs.setApp("Display", "texture_filter", it)
         }

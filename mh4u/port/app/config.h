@@ -60,6 +60,14 @@ struct Config {
     /// lighter: no shadow-texture effects at all; shadows: lighter, and a surface a shadow needs
     /// is replaced by one with storage. Env AZAHAR_VK_NO_STORAGE (0, 1 or 2).
     std::string vk_no_storage = "off";
+    /// Android: the cores the game's threads run on: default (Android decides), big (big + prime),
+    /// prime (the prime core only), little. Read when the game starts.
+    std::string cpu_affinity = "default";
+    /// Android, Adreno: keeps the GPU clocked up (libadrenotools). Uses more power, runs warmer.
+    bool adreno_boost = false;
+    /// Android, Adreno: the imported GPU driver (its folder name) to load instead of the system's;
+    /// "system" for the phone's own. A change takes the next start of the app.
+    std::string gpu_driver = "system";
     /// Vulkan: draws in a render pass before its end is flushed (Mali/Qualcomm); 0 = Azahar's 20.
     /// Env AZAHAR_VK_FLUSH_DRAWS.
     int vk_flush_draws = 0;
