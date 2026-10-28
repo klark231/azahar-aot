@@ -38,7 +38,14 @@ struct ShaderRegs {
 };
 struct PipelineRegs {
     enum class UseGS : u32 { No = 0, Yes = 2 };
+    enum class GSMode : u32 { Point = 0, VariablePrim = 1, FixedPrim = 2 };
+    enum class TriangleTopology : u32 { List = 0, Strip = 1, Fan = 2, Shader = 3 };
+    struct GSConfig {
+        GSMode mode = GSMode::Point;
+    };
     UseGS use_gs = UseGS::No;
+    GSConfig gs_config;
+    TriangleTopology triangle_topology = TriangleTopology::List;
 };
 struct RegsInternal {
     static constexpr std::size_t NUM_REGS = 0x300;

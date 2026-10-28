@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <string>
+#include <vector>
 
 #include "common/logging/log.h"
 #include "video_core/frame_interp/frame_interp_driver.h"
@@ -21,6 +22,17 @@ static int g_failures = 0, g_checks = 0;
     } while (0)
 
 using namespace FrameInterp;
+
+/// The per-frame analysis lines of the log, without the CPU-draw breakdown lines.
+static std::vector<std::string> AnalysisLines() {
+    std::vector<std::string> lines;
+    for (const std::string& l : MockLog()) {
+        if (l.find("game frames/s") != std::string::npos) {
+            lines.push_back(l);
+        }
+    }
+    return lines;
+}
 
 static void SetOutputMap(Pica::RegsInternal& regs, u32 total, u32 a0, u32 a1, u32 a2, u32 mask) {
     regs.rasterizer.vs_output_total = total;
@@ -85,10 +97,11 @@ static void FollowsAMovingMatrix() {
         driver.OnFrameBoundary();
         driver.OnFrameBoundary(); // a refresh the game drew nothing in: not a frame
     }
-    CHECK(MockLog().size() == 4); // one report per game frame, none for the idle refreshes
-    if (MockLog().size() == 4) {
-        const std::string& first = MockLog()[0];
-        const std::string& last = MockLog()[3];
+    const auto lines = AnalysisLines();
+    CHECK(lines.size() == 4); // one report per game frame, none for the idle refreshes
+    if (lines.size() == 4) {
+        const std::string& first = lines[0];
+        const std::string& last = lines[3];
         CHECK(first.find("0% matched") != std::string::npos);
         CHECK(last.find("50% matched") != std::string::npos);  // one of two draws is on the CPU
         CHECK(last.find("50% moved smoothly") != std::string::npos);
@@ -139,7 +152,53 @@ static void ACameraCutIsNotSmooth() {
     }
 }
 
+static void CpuDrawsAreSortedByCause() {
+    std::puts("cpu_draws_are_sorted_by_cause");
+    using Regs = Pica::PipelineRegs;
+    MockLog().clear();
+    Pica::PicaCore pica;
+    FillProgram(pica.vs_setup);
+    Pica::PicaCore other;
+    FillProgram(other.vs_setup);
+    other.vs_setup.code[5] = 0x21u << 26; // another program
+    Driver driver{std::chrono::milliseconds(0)};
+    auto& pipeline = pica.regs.internal.pipeline;
+
+    // 6 draws through a geometry shader that is not in point mode
+    pipeline.use_gs = Regs::UseGS::Yes;
+    pipeline.gs_config.mode = Regs::GSMode::VariablePrim;
+    for (int i = 0; i < 6; ++i) driver.OnDraw(pica, false);
+    // 2 point-mode geometry shaders without the shader's topology
+    pipeline.gs_config.mode = Regs::GSMode::Point;
+    pipeline.triangle_topology = Regs::TriangleTopology::List;
+    for (int i = 0; i < 2; ++i) driver.OnDraw(pica, false);
+    // 1 triangle fan, and 1 that was refused some other way (another program)
+    pipeline.use_gs = Regs::UseGS::No;
+    pipeline.triangle_topology = Regs::TriangleTopology::Fan;
+    driver.OnDraw(pica, false);
+    other.regs.internal.pipeline.triangle_topology = Regs::TriangleTopology::List;
+    driver.OnDraw(other, false);
+    // a frame boundary needs an accelerated draw to count as a frame
+    driver.OnDraw(pica, true);
+    driver.OnFrameBoundary();
+
+    CHECK(MockLog().size() == 2); // the analysis line, then the CPU draw line
+    if (MockLog().size() == 2) {
+        const std::string& line = MockLog()[1];
+        CHECK(line.find("10.0 draws/frame shaded on the CPU") != std::string::npos);
+        CHECK(line.find("geometry shader 60%") != std::string::npos);
+        CHECK(line.find("geometry shader topology 20%") != std::string::npos);
+        CHECK(line.find("triangle fan 10%") != std::string::npos);
+        CHECK(line.find("(shader or vertex setup refused) 10%") != std::string::npos);
+        // the eight geometry shader draws are one program, the fan and the other draw one each
+        CHECK(line.find("3 distinct programs") != std::string::npos);
+        CHECK(line.find(" 80%,") != std::string::npos);
+        std::printf("  e.g. %s\n", line.c_str());
+    }
+}
+
 int main() {
+    CpuDrawsAreSortedByCause();
     OutputMapDecoding();
     FollowsAMovingMatrix();
     ADifferentModelDoesNotMatch();
