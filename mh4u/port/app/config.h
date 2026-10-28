@@ -60,6 +60,13 @@ struct Config {
     /// lighter: no shadow-texture effects at all; shadows: lighter, and a surface a shadow needs
     /// is replaced by one with storage. Env AZAHAR_VK_NO_STORAGE (0, 1 or 2).
     std::string vk_no_storage = "off";
+    /// The editable "custom" screen layout, written by the layout editor: x,y,width,height of the
+    /// top screen then of the bottom one, in pixels of the game window (landscape, portrait).
+    std::string custom_layout;
+    std::string custom_layout_portrait;
+    /// AzaharPlus's built-in cheats for the game: shown and usable (the default), or hidden so only
+    /// the player's own cheats are listed. Read when a game starts; the Cheats page switches it live.
+    bool builtin_cheats = true;
     /// Android: the cores the game's threads run on: default (Android decides), big (big + prime),
     /// prime (the prime core only), little. Read when the game starts.
     std::string cpu_affinity = "default";
@@ -82,6 +89,15 @@ struct Config {
     std::string audio_output = "auto";
     /// Android: the audio driver cubeb uses: auto, aaudio, opensl. Read when a game starts.
     std::string audio_driver = "auto";
+    /// The 3DS's sound chip: hle (fast), lle (accurate, heavier), lle_mt (accurate, own thread).
+    std::string audio_emulation = "hle";
+    bool audio_stretching = true;   ///< stretches audio instead of letting it stutter (adds latency)
+    bool audio_realtime = false;    ///< audio keeps full speed when the frame rate drops
+    bool headphones = false;        ///< the emulated 3DS reports headphones plugged in
+    /// What the game hears from the microphone: auto, null (nothing), static, cubeb, openal.
+    std::string audio_input = "auto";
+    /// The 3DS's sound setting: mono, stereo, surround (stored in the console's system data).
+    std::string sound_mode = "stereo";
 
     // [Controls]
     /// Per 3DS button (Settings::NativeButton) and stick (Settings::NativeAnalog): keyboard keys

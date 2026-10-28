@@ -48,6 +48,7 @@ class EmulationActivity : ComponentActivity(), SurfaceHolder.Callback {
     private var gameThread: Thread? = null
     private var menuOpen by mutableStateOf(false)
     private var editing by mutableStateOf(false)
+    private var layoutEditing by mutableStateOf(false)   // the custom screen layout editor
     private val chat = ChatModel()
     private var chatOpen by mutableStateOf(false)
     private var selected by mutableStateOf<Control?>(null)
@@ -76,9 +77,13 @@ class EmulationActivity : ComponentActivity(), SurfaceHolder.Callback {
         root.addView(overlay, FrameLayout.LayoutParams(-1, -1))
         root.addView(ComposeView(this).apply { setContent { Mh4uTheme { Hud() } } }, FrameLayout.LayoutParams(-1, -1))
         setContentView(root)
+        LayoutEditor.opener = {
+            menuOpen = false; chatOpen = false; layoutEditing = true
+            overlay.shown = false; MH4UInput.releaseAll()
+        }
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() { if (chatOpen) closeChat() else if (menuOpen) closeMenu() else openMenu() }
+            override fun handleOnBackPressed() { handleBack() }
         })
 
         Prefs.apply()
@@ -197,8 +202,9 @@ class EmulationActivity : ComponentActivity(), SurfaceHolder.Callback {
                     .background(Color(0x99121214)).padding(horizontal = 6.dp, vertical = 2.dp))
             if (notice.isNotEmpty() && !menuOpen)
                 Box(Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(16.dp).clickable { notice = "" }) { Notice(notice + "\n(tap to dismiss)") }
-            ChatOverlay(chat, hidden = menuOpen || editing, inputOpen = chatOpen, onOpen = { openChat() }, onClose = { closeChat() })
+            ChatOverlay(chat, hidden = menuOpen || editing || layoutEditing, inputOpen = chatOpen, onOpen = { openChat() }, onClose = { closeChat() })
             if (editing) EditBar()
+            if (layoutEditing) CustomLayoutEditorHost { layoutEditing = false; overlay.shown = true; applyOverlayPrefs() }
             if (menuOpen) Menu()
         }
     }
@@ -323,7 +329,20 @@ class EmulationActivity : ComponentActivity(), SurfaceHolder.Callback {
 
     // ── input ──
 
+    /** Back (the key, the gesture or the nav bar): chat, then the menu closes; otherwise the menu opens. */
+    private fun handleBack() { if (layoutEditing) return; if (chatOpen) closeChat() else if (menuOpen) closeMenu() else openMenu() }
+
+    override fun onDestroy() {
+        LayoutEditor.opener = null
+        super.onDestroy()
+    }
+
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        // the system's Back (a pad's B has a gamepad source and is the game's)
+        if (e.keyCode == KeyEvent.KEYCODE_BACK && e.source and InputDevice.SOURCE_GAMEPAD != InputDevice.SOURCE_GAMEPAD) {
+            if (e.action == KeyEvent.ACTION_UP && !e.isCanceled) handleBack()
+            return true
+        }
         if (chatOpen) return super.dispatchKeyEvent(e)   // typing: keys are the keyboard's, not the game's
         if (e.keyCode == KeyEvent.KEYCODE_BUTTON_MODE && e.action == KeyEvent.ACTION_DOWN && !menuOpen) { openMenu(); return true }
         // while binding in the menu the engine learns from the same events

@@ -58,10 +58,14 @@ object MH4UInput {
     fun takeActions(): Int = nativeTakeActions()
 
     /** The stick dead zone and the press point of axes used as buttons (Controls > Tuning). */
-    fun applyTuning() = nativeSetTuning(
-        Prefs.getInt("Controls", "deadzone", 12).coerceIn(0, 50),
-        Prefs.getInt("Controls", "press_point", 50).coerceIn(15, 95),
-    )
+    fun applyTuning() {
+        nativeSetTuning(
+            Prefs.getInt("Controls", "deadzone", 12).coerceIn(0, 50),
+            Prefs.getInt("Controls", "press_point", 50).coerceIn(15, 95),
+        )
+        // Turbo's buttons and rate too: they were only sent when another setting happened to apply
+        setTurbo(Prefs.turboButtons, Prefs.turboRate)
+    }
 
     /** The buttons Turbo makes pulse, and how many times a second. */
     fun setTurbo(mask: Int, hertz: Int) = nativeSetTurbo(mask, hertz)

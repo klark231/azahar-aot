@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import org.json.JSONArray
 import org.mh4u.port.Native
+import org.mh4u.port.Prefs
 
 /** One cheat of the running game, as the native side lists it. */
 private data class CheatItem(val index: Int, val name: String, val comments: String, val code: String, val enabled: Boolean)
@@ -69,6 +70,14 @@ fun CheatsPage() {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp)) {
         SectionTitle("Cheats")
         Panel {
+            var builtin by remember { mutableStateOf(Prefs.getBool("Display", "builtin_cheats", true)) }
+            ToggleRow("Built-in cheats", "Show the cheats that come with the game. When off, only the cheats you added are listed and the built-in ones are switched off. Turning it on lists them from the next game start.", builtin) {
+                builtin = it
+                Prefs.setBool("Display", "builtin_cheats", it)
+                Native.cheatShowBuiltIn(it)
+                reload()
+            }
+            RowDivider()
             Hint("Gateway cheats for this game, saved to its cheat file as you edit them. A cheat can crash the game or corrupt a save, so back up your save first. In a multiplayer room, cheats that change the game state can desynchronise you from the other players.")
         }
         Spacer(Modifier.height(8.dp))

@@ -195,7 +195,8 @@ void ApplyScreenExtras(const std::string& text) {
         } else if (key == "portrait") {
             v.portrait_layout_option =
                 value == "original" ? Settings::PortraitLayoutOption::PortraitOriginal
-                : value == "custom" ? Settings::PortraitLayoutOption::PortraitCustomLayout
+                : (value == "custom" || g_config.screens == "custom")   // the editable layout has a portrait one too
+                    ? Settings::PortraitLayoutOption::PortraitCustomLayout
                                     : Settings::PortraitLayoutOption::PortraitTopFullWidth;
         }
     }
@@ -329,6 +330,44 @@ void ApplyConfig(const App::Config& config) {
                                  : config.cpu_affinity == "little" ? 3
                                                                    : 0);
     SetAdrenoBoost(config.adreno_boost);   // live: takes effect in a running game too
+    // the editable custom layout: eight numbers each, x y width height of the top screen then the bottom
+    if (config.screens == "custom") {
+        const auto load = [](const std::string& text, bool portrait) {
+            int n[8];
+            if (std::sscanf(text.c_str(), "%d,%d,%d,%d,%d,%d,%d,%d", &n[0], &n[1], &n[2], &n[3], &n[4], &n[5], &n[6], &n[7]) != 8) {
+                return;   // none saved yet: the editor makes one that fits the window
+            }
+            const auto u = [](int x) { return static_cast<u16>(std::clamp(x, 0, 65535)); };
+            if (portrait) {
+                v.custom_portrait_top_x = u(n[0]);       v.custom_portrait_top_y = u(n[1]);
+                v.custom_portrait_top_width = u(n[2]);   v.custom_portrait_top_height = u(n[3]);
+                v.custom_portrait_bottom_x = u(n[4]);    v.custom_portrait_bottom_y = u(n[5]);
+                v.custom_portrait_bottom_width = u(n[6]); v.custom_portrait_bottom_height = u(n[7]);
+            } else {
+                v.custom_top_x = u(n[0]);       v.custom_top_y = u(n[1]);
+                v.custom_top_width = u(n[2]);   v.custom_top_height = u(n[3]);
+                v.custom_bottom_x = u(n[4]);    v.custom_bottom_y = u(n[5]);
+                v.custom_bottom_width = u(n[6]); v.custom_bottom_height = u(n[7]);
+            }
+        };
+        load(config.custom_layout, false);
+        load(config.custom_layout_portrait, true);
+        v.portrait_layout_option = Settings::PortraitLayoutOption::PortraitCustomLayout;
+    }
+    // the sound settings the game reads when it starts
+    v.audio_emulation = config.audio_emulation == "lle"      ? Settings::AudioEmulation::LLE
+                        : config.audio_emulation == "lle_mt" ? Settings::AudioEmulation::LLEMultithreaded
+                                                             : Settings::AudioEmulation::HLE;
+    v.enable_audio_stretching = config.audio_stretching;
+    v.enable_realtime_audio = config.audio_realtime;
+    v.simulate_headphones_plugged = config.headphones;
+    v.input_type = config.audio_input == "null"     ? AudioCore::InputType::Null
+                   : config.audio_input == "static" ? AudioCore::InputType::Static
+                   : config.audio_input == "cubeb"  ? AudioCore::InputType::Cubeb
+                   : config.audio_input == "openal" ? AudioCore::InputType::OpenAL
+                                                    : AudioCore::InputType::Auto;
+    // built-in cheats are added when the game's cheat file is loaded, so this is read at start
+    Cheats::GatewayCheat::SetBuiltInEnabled(config.builtin_cheats);
     // this Azahar counts the internal resolution in percent (100: native); the app's ini in
     // multiples of the 3DS's, 0 meaning from the screen
     v.resolution_factor = static_cast<u32>(config.resolution * 100);
@@ -410,6 +449,17 @@ Core::System::ResultStatus Run(const std::string& game, std::string& message) {
         message = system.GetStatusDetails();
         g_window.reset();
         return status;
+    }
+
+    // the console's sound setting lives in its system data; the game reads it as it starts
+    if (const auto cfg = Service::CFG::GetModule(system)) {
+        const auto mode = g_config.sound_mode == "mono"       ? Service::CFG::SOUND_MONO
+                          : g_config.sound_mode == "surround" ? Service::CFG::SOUND_SURROUND
+                                                              : Service::CFG::SOUND_STEREO;
+        if (cfg->GetSoundOutputMode() != mode) {
+            cfg->SetSoundOutputMode(mode);
+            cfg->UpdateConfigNANDSavegame();
+        }
     }
 
     g_pause = false;
@@ -529,6 +579,28 @@ FN(void, init, jstring private_dir) {
 
 /// Where libadrenotools' hooks are (the app's native library folder) and where the GPU drivers
 /// the player imported live.
+/// The custom screen layout (pixels of the game window), from the layout editor: shown at once.
+FN(void, setCustomLayout, jint top_x, jint top_y, jint top_w, jint top_h, jint bottom_x, jint bottom_y,
+   jint bottom_w, jint bottom_h, jboolean portrait) {
+    auto& v = Settings::values;
+    const auto u = [](jint n) { return static_cast<u16>(std::clamp<jint>(n, 0, 65535)); };
+    if (portrait) {
+        v.custom_portrait_top_x = u(top_x);       v.custom_portrait_top_y = u(top_y);
+        v.custom_portrait_top_width = u(top_w);   v.custom_portrait_top_height = u(top_h);
+        v.custom_portrait_bottom_x = u(bottom_x); v.custom_portrait_bottom_y = u(bottom_y);
+        v.custom_portrait_bottom_width = u(bottom_w); v.custom_portrait_bottom_height = u(bottom_h);
+    } else {
+        v.custom_top_x = u(top_x);       v.custom_top_y = u(top_y);
+        v.custom_top_width = u(top_w);   v.custom_top_height = u(top_h);
+        v.custom_bottom_x = u(bottom_x); v.custom_bottom_y = u(bottom_y);
+        v.custom_bottom_width = u(bottom_w); v.custom_bottom_height = u(bottom_h);
+    }
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        system.GPU().Renderer().UpdateCurrentFramebufferLayout(portrait);
+    }
+}
+
 FN(void, setDriverDirs, jstring hook_lib_dir, jstring drivers_dir) {
     g_hook_lib_dir = Str(env, hook_lib_dir);
     g_drivers_dir = Str(env, drivers_dir);
@@ -764,12 +836,31 @@ FN(jstring, cheatList) {
     if (CheatTitleId() != 0) {
         const auto cheats = Core::System::GetInstance().CheatEngine().GetCheats();
         int i = 0;
+        const bool show_builtin = Cheats::GatewayCheat::IsBuiltInEnabled();
         for (const auto& c : cheats) {
-            list.push_back({{"i", i++}, {"name", c->GetName()}, {"comments", c->GetComments()},
+            const int index = i++;   // the engine's index, also for the ones left out
+            if (c->IsBuiltIn() && !show_builtin) continue;
+            list.push_back({{"i", index}, {"name", c->GetName()}, {"comments", c->GetComments()},
                             {"code", c->GetCode()}, {"enabled", c->IsEnabled()}, {"builtin", c->IsBuiltIn()}});
         }
     }
     return JStr(env, list.dump());
+}
+
+/// Built-in cheats shown or hidden. Hiding also switches them off, so a hidden cheat never runs.
+FN(void, cheatShowBuiltIn, jboolean show) {
+    std::scoped_lock lock(g_cheat_mutex);
+    Cheats::GatewayCheat::SetBuiltInEnabled(show);
+    if (!show && CheatTitleId() != 0) {
+        bool changed = false;
+        for (const auto& c : Core::System::GetInstance().CheatEngine().GetCheats()) {
+            if (c->IsBuiltIn() && c->IsEnabled()) {
+                c->SetEnabled(false);
+                changed = true;
+            }
+        }
+        if (changed) SaveCheats();
+    }
 }
 
 FN(jboolean, cheatSetEnabled, jint index, jboolean enabled) {

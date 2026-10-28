@@ -208,10 +208,20 @@ fun DisplayPage() = Page {
     SectionTitle("Screens")
     Panel {
         var screens by remember { mutableStateOf(Prefs.getApp("Display", "screens", "overlay")) }
+        var editorHint by remember { mutableStateOf(false) }
         ChoiceRow("Layout", "Overlay: the game fills the screen with the touch screen in a corner (see Game > Touch screen over the game).",
             listOf("Overlay" to "overlay", "Stacked" to "stacked", "Single screen" to "single",
-                "Side by side" to "side", "Large + small" to "large", "Hybrid" to "hybrid"), screens) {
+                "Side by side" to "side", "Large + small" to "large", "Hybrid" to "hybrid",
+                "Custom (drag and resize)" to "custom"), screens) {
             screens = it; Prefs.setApp("Display", "screens", it); Prefs.apply()
+            if (it == "custom") LayoutEditor.open()
+        }
+        if (screens == "custom") {
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                AmberButton("Edit custom layout") { editorHint = !LayoutEditor.open() }
+            }
+            Hint(if (editorHint) "Open the in-game menu (Back), then Display, to edit the layout on the running game."
+                 else "Drag a screen to move it, use its handles or two fingers to resize. The layout is saved and kept when the app is closed. Restart the game after first choosing Custom.")
         }
         RowDivider()
         var portrait by remember { mutableStateOf(Prefs.getApp("Android", "portrait", "top")) }
@@ -351,6 +361,43 @@ fun AudioPage() = Page {
         ChoiceRow("Audio driver", "AAudio is Android's low-latency audio path (Android 8.1 and newer); OpenSL ES is the older one. The driver can change audio latency and dropouts. Its effect on frame rate depends on the device, so compare using the frame counter. The driver in use is recorded in the log. Applies on the next game start.",
             listOf("Automatic" to "auto", "AAudio" to "aaudio", "OpenSL ES" to "opensl"), audioDriver) {
             audioDriver = it; Prefs.setApp("Audio", "driver", it)
+        }
+        RowDivider()
+        var stretching by remember { mutableStateOf(Prefs.getBool("Audio", "stretching", true)) }
+        ToggleRow("Audio stretching", "Stretches audio to reduce stuttering. When enabled, it increases audio latency and slightly reduces performance. Applies on the next game start.", stretching) {
+            stretching = it; Prefs.setBool("Audio", "stretching", it)
+        }
+        RowDivider()
+        var realtime by remember { mutableStateOf(Prefs.getBool("Audio", "realtime", false)) }
+        ToggleRow("Realtime audio", "Scales audio playback speed to account for drops in the emulated frame rate, so audio plays at full speed while the frame rate is low. May cause audio desynchronisation. Applies on the next game start.", realtime) {
+            realtime = it; Prefs.setBool("Audio", "realtime", it)
+        }
+        RowDivider()
+        var headphones by remember { mutableStateOf(Prefs.getBool("Audio", "headphones", false)) }
+        ToggleRow("Simulate headphones plugged in", "Reports to the emulated 3DS whether headphones are plugged in. Applies on the next game start.", headphones) {
+            headphones = it; Prefs.setBool("Audio", "headphones", it)
+        }
+        if (!Native.isRunning()) {   // read as the game starts: changed from the main screen, as in AzaharPlus
+        RowDivider()
+        var soundMode by remember { mutableStateOf(Prefs.getApp("Audio", "sound_mode", "stereo")) }
+        ChoiceRow("Sound output mode", "The 3DS's own sound setting, stored in its system data. Applies on the next game start.",
+            listOf("Mono" to "mono", "Stereo" to "stereo", "Surround" to "surround"), soundMode) {
+            soundMode = it; Prefs.setApp("Audio", "sound_mode", it)
+        }
+        }
+        RowDivider()
+        var audioEmu by remember { mutableStateOf(Prefs.getApp("Audio", "emulation", "hle")) }
+        ChoiceRow("Audio emulation", "HLE is fast and works for most games. LLE emulates the 3DS's sound chip more accurately and needs more CPU; the multithreaded variant runs it on its own thread. Applies on the next game start.",
+            listOf("HLE (fast)" to "hle", "LLE (accurate)" to "lle", "LLE, multithreaded" to "lle_mt"), audioEmu) {
+            audioEmu = it; Prefs.setApp("Audio", "emulation", it)
+        }
+        if (!Native.isRunning()) {
+        RowDivider()
+        var audioInput by remember { mutableStateOf(Prefs.getApp("Audio", "input", "auto")) }
+        ChoiceRow("Audio input device", "What the game hears from the microphone. A real device needs the microphone permission. Applies on the next game start.",
+            listOf("Automatic" to "auto", "None" to "null", "Static noise" to "static", "Real device (Cubeb)" to "cubeb", "Real device (OpenAL)" to "openal"), audioInput) {
+            audioInput = it; Prefs.setApp("Audio", "input", it)
+        }
         }
     }
     Spacer(Modifier.height(24.dp))

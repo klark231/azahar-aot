@@ -119,10 +119,10 @@ fun ControlsPage(onEditOverlay: (() -> Unit)? = null, onOverlayChanged: () -> Un
             Hint("While Turbo is held, the buttons selected here pulse instead of staying pressed. Bind Turbo above, add an on-screen Turbo button (Edit layout > Show it), or create a combo with \"Stay pressed until tapped again\" to keep it on.")
             Spacer(Modifier.height(8.dp))
             var turbo by remember { mutableIntStateOf(Prefs.turboButtons) }
-            FlowChips(turbo, MH4UInput.padButtons) { turbo = it; Prefs.turboButtons = it }
+            FlowChips(turbo, MH4UInput.padButtons) { turbo = it; Prefs.turboButtons = it; Prefs.applyInput() }
             var rate by remember { mutableFloatStateOf(Prefs.turboRate.toFloat()) }
             SliderRow("Presses per second", "The game polls its buttons about 30 times per second. A value of 7 or 8 produces clean presses.", rate, 2f..15f, "", steps = 12) {
-                rate = it.roundToInt().toFloat(); Prefs.turboRate = rate.toInt()
+                rate = it.roundToInt().toFloat(); Prefs.turboRate = rate.toInt(); Prefs.applyInput()
             }
         }
 

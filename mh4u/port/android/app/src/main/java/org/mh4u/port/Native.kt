@@ -11,6 +11,10 @@ object Native {
 
     /** Where libadrenotools' hooks are and where the imported GPU drivers live (see GpuDrivers). */
     @JvmStatic external fun setDriverDirs(hookLibDir: String, driversDir: String)
+    /** The custom screen layout from the editor, in pixels of the game window; shown at once. */
+    @JvmStatic external fun setCustomLayout(topX: Int, topY: Int, topW: Int, topH: Int, bottomX: Int, bottomY: Int, bottomW: Int, bottomH: Int, portrait: Boolean)
+    /** Shows or hides the game's built-in cheats (hiding switches them off). */
+    @JvmStatic external fun cheatShowBuiltIn(show: Boolean)
     /** True on a phone with an Adreno GPU (the Adreno-only settings are shown only then). */
     @JvmStatic external fun isAdreno(): Boolean
     /** True on an Adreno phone that can load a custom Vulkan driver. */

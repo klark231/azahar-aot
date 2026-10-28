@@ -34,6 +34,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import org.json.JSONObject
 import org.mh4u.port.Native
 import org.mh4u.port.Prefs
@@ -119,9 +128,10 @@ fun ChatOverlay(model: ChatModel, hidden: Boolean, inputOpen: Boolean, onOpen: (
     LaunchedEffect(model.inRoom, inputOpen) { if (!model.inRoom && inputOpen) onClose() }
 
     if (!model.inRoom || hidden) return
-    Box(Modifier.fillMaxSize()) {
+    var area by remember { mutableStateOf(IntSize.Zero) }
+    Box(Modifier.fillMaxSize().onSizeChanged { area = it }) {
         ChatLog(model, inputOpen)
-        if (!inputOpen) ChatButton(model.unread, model.style) { model.unread = 0; onOpen() }
+        if (!inputOpen) ChatButton(model.unread, model.style, area) { model.unread = 0; onOpen() }
         else ChatInput(
             onSend = { text -> scope.launch(Dispatchers.IO) { Native.chatSend(text) } },
             onClose = onClose,
@@ -142,15 +152,18 @@ private fun BoxScope.ChatLog(model: ChatModel, inputOpen: Boolean) {
     val shown = if (inputOpen) model.lines.toList() else model.lines.takeLast(model.style.maxLines)
     if ((recent || inputOpen) && shown.isNotEmpty()) {
         val scroll = rememberScrollState()
-        // stay at the newest line, unless the player has scrolled up to read
-        val atBottom = scroll.maxValue - scroll.value < 40
-        LaunchedEffect(shown.size, inputOpen) { if (atBottom || inputOpen) scroll.scrollTo(scroll.maxValue) }
+        // new lines scroll into view only while the player is at the bottom; scrolled up to read,
+        // the history stays put. Opening the input starts at the newest line.
+        var follow by remember { mutableStateOf(true) }
+        LaunchedEffect(scroll.value, scroll.maxValue) { follow = scroll.maxValue - scroll.value < 48 }
+        LaunchedEffect(inputOpen) { follow = true }
+        LaunchedEffect(shown.size, inputOpen) { if (follow || !inputOpen) scroll.scrollTo(scroll.maxValue) }
         Column(
             Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 96.dp, top = 8.dp)
                 .widthIn(max = (280 + (model.style.fontSp - 12) * 12).dp)
-                .then(if (inputOpen) Modifier.heightIn(max = 160.dp) else Modifier)
+                .then(if (inputOpen) Modifier.heightIn(max = 260.dp) else Modifier)
                 .background(Color(0xFF121214).copy(alpha = model.style.bgOpacity / 100f), RoundedCornerShape(6.dp))
-                .then(if (inputOpen) Modifier.verticalScroll(scroll) else Modifier)
+                .then(if (inputOpen) Modifier.verticalScroll(scroll).scrollBar(scroll) else Modifier)
                 .padding(6.dp),
         ) {
             for (m in shown) {
@@ -169,14 +182,38 @@ private fun BoxScope.ChatLog(model: ChatModel, inputOpen: Boolean) {
     }
 }
 
-/** The round button that opens the input; a red count of what came in since it was last opened. */
+/**
+ * The round button that opens the input; a red count of what came in since it was last opened.
+ * Drag it anywhere: where it was left is kept (mh4u-app.ini, [Chat] button_x and button_y, in
+ * thousandths of the room the screen leaves), also when the app is closed.
+ */
 @Composable
-private fun BoxScope.ChatButton(unread: Int, style: ChatStyle, onClick: () -> Unit) {
+private fun BoxScope.ChatButton(unread: Int, style: ChatStyle, area: IntSize, onClick: () -> Unit) {
+    val size = with(androidx.compose.ui.platform.LocalDensity.current) { style.buttonDp.dp.roundToPx() }
+    var fx by remember { mutableFloatStateOf(Prefs.getInt("Chat", "button_x", 610) / 1000f) }
+    var fy by remember { mutableFloatStateOf(Prefs.getInt("Chat", "button_y", 60) / 1000f) }
+    val freeX = (area.width - size).coerceAtLeast(1)
+    val freeY = (area.height - size).coerceAtLeast(1)
     Box(
-        Modifier.align(BiasAlignment(0.22f, -0.88f)).size(style.buttonDp.dp)
+        Modifier.align(Alignment.TopStart)
+            .offset { IntOffset((fx * freeX).toInt(), (fy * freeY).toInt()) }
+            .size(style.buttonDp.dp)
             .alpha(style.buttonOpacity / 100f)
             .background(Color(0xFF121214).copy(alpha = .6f), CircleShape).border(1.dp, Mh4uColors.Border, CircleShape)
-            .clickable(onClick = onClick),
+            .pointerInput(Unit) { detectTapGestures(onTap = { onClick() }) }
+            .pointerInput(freeX, freeY) {
+                detectDragGestures(
+                    onDrag = { change, drag: Offset ->
+                        change.consume()
+                        fx = (fx + drag.x / freeX).coerceIn(0f, 1f)
+                        fy = (fy + drag.y / freeY).coerceIn(0f, 1f)
+                    },
+                    onDragEnd = {
+                        Prefs.setApp("Chat", "button_x", (fx * 1000).toInt().toString())
+                        Prefs.setApp("Chat", "button_y", (fy * 1000).toInt().toString())
+                    },
+                )
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text("💬", fontSize = (style.buttonDp * 0.41f).sp)
@@ -218,5 +255,16 @@ private fun BoxScope.ChatInput(onSend: (String) -> Unit, onClose: () -> Unit) {
             AmberButton("Send", enabled = text.isNotBlank()) { send() }
             QuietButton("✕") { onClose() }
         }
+    }
+}
+
+/** A thin bar at the right edge showing where the visible part sits in a long, scrolling history. */
+private fun Modifier.scrollBar(state: androidx.compose.foundation.ScrollState): Modifier = drawWithContent {
+    drawContent()
+    if (state.maxValue > 0) {
+        val total = size.height + state.maxValue
+        val bar = (size.height * size.height / total).coerceAtLeast(24f)
+        val top = (size.height - bar) * state.value / state.maxValue
+        drawRoundRect(Color(0x99E0A030), Offset(size.width - 4f, top), androidx.compose.ui.geometry.Size(3f, bar), androidx.compose.ui.geometry.CornerRadius(2f, 2f))
     }
 }

@@ -134,6 +134,9 @@ Config Load() {
                           : (m == "lighter" || IsOn(m)) ? "lighter" : "off";
     }
     c.vk_flush_draws = num("Display", "vk_flush_draws", c.vk_flush_draws, 0, 1000);
+    c.builtin_cheats = flag("Display", "builtin_cheats", c.builtin_cheats);
+    c.custom_layout = str("Display", "custom_layout", c.custom_layout);
+    c.custom_layout_portrait = str("Display", "custom_layout_portrait", c.custom_layout_portrait);
     c.cpu_affinity = str("Display", "cpu_affinity", c.cpu_affinity);
     c.adreno_boost = flag("Display", "adreno_boost", c.adreno_boost);
     c.gpu_driver = str("Display", "gpu_driver", c.gpu_driver);
@@ -145,6 +148,12 @@ Config Load() {
     c.volume = num("Audio", "volume", c.volume, 0, 100);
     c.audio_output = str("Audio", "output", c.audio_output);
     c.audio_driver = str("Audio", "driver", c.audio_driver);
+    c.audio_emulation = str("Audio", "emulation", c.audio_emulation);
+    c.audio_stretching = flag("Audio", "stretching", c.audio_stretching);
+    c.audio_realtime = flag("Audio", "realtime", c.audio_realtime);
+    c.headphones = flag("Audio", "headphones", c.headphones);
+    c.audio_input = str("Audio", "input", c.audio_input);
+    c.sound_mode = str("Audio", "sound_mode", c.sound_mode);
 
     for (int i = 0; i < NativeButton::NumButtons; ++i) {
         c.keys[i] = str("Controls", NativeButton::mapping[i], c.keys[i]);
@@ -298,6 +307,12 @@ aot_fewer_unwinds = {}
 vk_no_storage = {}
 # draws in a render pass before it is flushed on Mali/Qualcomm; 0 = Azahar's default (20)
 vk_flush_draws = {}
+# the custom screen layout (the layout editor writes these): x,y,width,height of the top screen,
+# then of the bottom one, in pixels of the game window
+custom_layout = {}
+custom_layout_portrait = {}
+# AzaharPlus's built-in cheats: on shows them, off lists only your own
+builtin_cheats = {}
 # Android: default, big (big + prime cores), prime (the prime core only), little
 cpu_affinity = {}
 # Android, Adreno: keep the GPU clocked up (more power, warmer)
@@ -312,6 +327,18 @@ volume = {}
 output = {}
 # Android audio driver (cubeb): auto, aaudio, opensl
 driver = {}
+# the sound chip: hle, lle, lle_mt
+emulation = {}
+# stretch audio instead of stuttering (adds latency)
+stretching = {}
+# audio keeps full speed when the frame rate drops
+realtime = {}
+# the emulated 3DS reports headphones plugged in
+headphones = {}
+# microphone: auto, null, static, cubeb, openal
+input = {}
+# the 3DS's sound setting: mono, stereo, surround
+sound_mode = {}
 
 [Controls]
 # controller = auto maps the first controller found like MH3U on a Wii U: the 3DS's A, B, X, Y
@@ -362,7 +389,7 @@ catalog_url = {}
                        OnOff(c.vsync), c.screens, OnOff(c.linear_filter), OnOff(c.custom_textures),
                        c.shader, c.fps_counter, OnOff(c.accurate_mul), OnOff(c.async_shaders),
                        OnOff(c.disk_shader_cache), OnOff(c.skip_duplicate_frames), c.texture_filter,
-                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.audio_driver, c.controller_auto ? "auto" : "off", keys,
+                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.custom_layout, c.custom_layout_portrait, OnOff(c.builtin_cheats), c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.audio_driver, c.audio_emulation, OnOff(c.audio_stretching), OnOff(c.audio_realtime), OnOff(c.headphones), c.audio_input, c.sound_mode, c.controller_auto ? "auto" : "off", keys,
                        params, c.touch_screen_key, c.fullscreen_key, c.fps_counter_key, c.nickname, c.join, c.password,
                        c.host, c.room_port, c.room_name, c.room_members, c.lobby, c.token,
                        OnOff(c.room_public), c.last_room, c.catalog_url);
@@ -404,6 +431,8 @@ void Apply(const Config& c) {
     SyncEnv("AZAHAR_VK_NO_STORAGE", c.vk_no_storage == "lighter" ? "1" : c.vk_no_storage == "shadows" ? "2" : nullptr);
     const std::string flush_draws = std::to_string(c.vk_flush_draws);
     SyncEnv("AZAHAR_VK_FLUSH_DRAWS", c.vk_flush_draws > 0 ? flush_draws.c_str() : nullptr);
+    // the custom layout and the touch overlay both use the custom frame: the overlay stands aside
+    SyncEnv("MH4U_TOUCH_OVERLAY", c.screens == "custom" ? "off" : nullptr);
     SyncEnv("AZAHAR_CUBEB_BACKEND", c.audio_driver == "aaudio" ? "aaudio" : c.audio_driver == "opensl" ? "opensl" : nullptr);
     auto& v = Settings::values;
     if (c.renderer == "opengl") {
