@@ -78,6 +78,10 @@ struct Config {
     /// Vulkan: draws in a render pass before its end is flushed (Mali/Qualcomm); 0 = Azahar's 20.
     /// Env AZAHAR_VK_FLUSH_DRAWS.
     int vk_flush_draws = 0;
+    /// Frame interpolation, stage A (needs patches/0007): matches each draw with the last
+    /// frame's and logs, every few seconds, how many matched and moved smoothly. Nothing is drawn
+    /// from it. Env AZAHAR_FRAME_INTERP.
+    bool frame_interp_stats = false;
     std::string texture_filter = "none";    ///< none, bicubic, scaleforce, xbrz, mmpx, anime4k
     std::string texture_sampling = "game";  ///< game, nearest, linear
     std::string shader;               ///< a post-processing shader, empty: none

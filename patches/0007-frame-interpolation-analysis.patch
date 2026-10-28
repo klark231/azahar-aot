@@ -1,0 +1,1108 @@
+diff -ruN a/src/video_core/CMakeLists.txt b/src/video_core/CMakeLists.txt
+--- a/src/video_core/CMakeLists.txt	2026-10-27 23:48:29.123524553 +0000
++++ b/src/video_core/CMakeLists.txt	2026-10-27 23:48:29.120585041 +0000
+@@ -13,6 +13,10 @@
+     gpu.h
+     gpu_debugger.h
+     gpu_impl.h
++    frame_interp/frame_interp.cpp
++    frame_interp/frame_interp.h
++    frame_interp/frame_interp_driver.cpp
++    frame_interp/frame_interp_driver.h
+     pica_types.h
+     precompiled_headers.h
+     rasterizer_accelerated.cpp
+diff -ruN a/src/video_core/frame_interp/frame_interp.cpp b/src/video_core/frame_interp/frame_interp.cpp
+--- a/src/video_core/frame_interp/frame_interp.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/src/video_core/frame_interp/frame_interp.cpp	2026-10-27 23:48:29.140945818 +0000
+@@ -0,0 +1,497 @@
++// Copyright 2026 Azahar Emulator Project
++// Licensed under GPLv2 or any later version
++// Refer to the license.txt file included.
++//
++// Ported from Zakuro (zakuro-gpu/src/interpolation.rs, shader/isa.rs, shader/mod.rs).
++
++#include "video_core/frame_interp/frame_interp.h"
++
++#include <algorithm>
++#include <cmath>
++#include <limits>
++#include <optional>
++#include <set>
++
++namespace FrameInterp {
++
++// ---------------------------------------------------------------------------------------------
++// Shader analysis
++// ---------------------------------------------------------------------------------------------
++
++namespace {
++
++Opcode OpcodeFromRaw(uint32_t value) {
++    switch (value) {
++    case 0x00: return Opcode::Add;
++    case 0x01: return Opcode::Dp3;
++    case 0x02: return Opcode::Dp4;
++    case 0x03: return Opcode::Dph;
++    case 0x04: return Opcode::Dst;
++    case 0x05: return Opcode::Ex2;
++    case 0x06: return Opcode::Lg2;
++    case 0x07: return Opcode::LitP;
++    case 0x08: return Opcode::Mul;
++    case 0x09: return Opcode::Sge;
++    case 0x0A: return Opcode::Slt;
++    case 0x0B: return Opcode::Flr;
++    case 0x0C: return Opcode::Max;
++    case 0x0D: return Opcode::Min;
++    case 0x0E: return Opcode::Rcp;
++    case 0x0F: return Opcode::Rsq;
++    case 0x12: return Opcode::Mova;
++    case 0x13: return Opcode::Mov;
++    case 0x18: return Opcode::DphI;
++    case 0x19: return Opcode::DstI;
++    case 0x1A: return Opcode::SgeI;
++    case 0x1B: return Opcode::SltI;
++    case 0x20: return Opcode::Break;
++    case 0x21: return Opcode::Nop;
++    case 0x22: return Opcode::End;
++    case 0x23: return Opcode::BreakC;
++    case 0x24: return Opcode::Call;
++    case 0x25: return Opcode::CallC;
++    case 0x26: return Opcode::CallU;
++    case 0x27: return Opcode::IfU;
++    case 0x28: return Opcode::IfC;
++    case 0x29: return Opcode::Loop;
++    case 0x2A: return Opcode::Emit;
++    case 0x2B: return Opcode::SetEmit;
++    case 0x2C: return Opcode::JmpC;
++    case 0x2D: return Opcode::JmpU;
++    // the low opcode bit belongs to the first comparison mode
++    case 0x2E:
++    case 0x2F: return Opcode::Cmp;
++    default:
++        // multiply-add only uses the top three opcode bits, the rest of the field holds the
++        // destination register
++        if (value >= 0x30 && value <= 0x37) return Opcode::MadI;
++        if (value >= 0x38 && value <= 0x3F) return Opcode::Mad;
++        return Opcode::Unknown;
++    }
++}
++
++/// Whether it writes a destination register, which arithmetic does but for mova and cmp.
++bool Writes(Opcode op) {
++    switch (op) {
++    case Opcode::Add: case Opcode::Dp3: case Opcode::Dp4: case Opcode::Dph: case Opcode::Dst:
++    case Opcode::Ex2: case Opcode::Lg2: case Opcode::LitP: case Opcode::Mul: case Opcode::Sge:
++    case Opcode::Slt: case Opcode::Flr: case Opcode::Max: case Opcode::Min: case Opcode::Rcp:
++    case Opcode::Rsq: case Opcode::Mov: case Opcode::DphI: case Opcode::DstI: case Opcode::SgeI:
++    case Opcode::SltI: case Opcode::Mad: case Opcode::MadI:
++        return true;
++    default:
++        return false;
++    }
++}
++
++/// The inverted encodings have the wide operand (the one that can be a uniform) second.
++bool IsInverted(Opcode op) {
++    return op == Opcode::DphI || op == Opcode::DstI || op == Opcode::SgeI || op == Opcode::SltI;
++}
++
++Op DecodeOp(uint32_t w) {
++    Op op;
++    op.word = w;
++    op.opcode = OpcodeFromRaw(w >> 26);
++    if (op.opcode == Opcode::Mad || op.opcode == Opcode::MadI) {
++        const uint32_t src1 = (w >> 17) & 0x1F;
++        uint32_t src2, src3;
++        if (op.opcode == Opcode::MadI) {
++            src2 = (w >> 12) & 0x1F;
++            src3 = (w >> 5) & 0x7F;
++        } else {
++            src2 = (w >> 10) & 0x7F;
++            src3 = (w >> 5) & 0x1F;
++        }
++        // the address register applies to whichever source is the wide one
++        const uint32_t index = (w >> 22) & 0x3;
++        op.destination = (w >> 24) & 0x1F;
++        op.src[0] = {src1, 0};
++        op.src[1] = {src2, op.opcode == Opcode::MadI ? 0u : index};
++        op.src[2] = {src3, op.opcode == Opcode::MadI ? index : 0u};
++    } else {
++        const bool inverted = IsInverted(op.opcode);
++        const uint32_t src1 = inverted ? (w >> 14) & 0x1F : (w >> 12) & 0x7F;
++        const uint32_t src2 = inverted ? (w >> 7) & 0x7F : (w >> 7) & 0x1F;
++        // only the wide operand can be a uniform, and only a uniform read can be indexed
++        const uint32_t index = (w >> 19) & 0x3;
++        op.destination = (w >> 21) & 0x1F;
++        op.src[0] = {src1, inverted ? 0u : index};
++        op.src[1] = {src2, inverted ? index : 0u};
++    }
++    return op;
++}
++
++/// An if's body when it is taken, its else when it is not, and where both come back to.
++struct IfRanges {
++    uint32_t then_start, then_end, else_start, else_end, next;
++};
++IfRanges GetIfRanges(uint32_t pc, uint32_t destination, uint32_t count) {
++    const uint32_t then_end = (pc + 1) + (destination - std::min(pc + 1, destination));
++    return {pc + 1, then_end, destination, destination + count, destination + count};
++}
++
++} // namespace
++
++std::shared_ptr<const Program> Program::Decode(const uint32_t* words, size_t count) {
++    auto program = std::make_shared<Program>();
++    program->ops_.reserve(count);
++    for (size_t i = 0; i < count; ++i) {
++        program->ops_.push_back(DecodeOp(words[i]));
++    }
++    return program;
++}
++
++std::vector<bool> Program::Reached(uint32_t entry) const {
++    std::vector<bool> reached(ops_.size(), false);
++    std::set<std::pair<uint32_t, uint32_t>> walked;
++    std::vector<std::pair<uint32_t, uint32_t>> ranges;
++    ranges.emplace_back(entry, static_cast<uint32_t>(ops_.size()));
++    while (!ranges.empty()) {
++        const auto [start, end] = ranges.back();
++        ranges.pop_back();
++        if (!walked.insert({start, end}).second) {
++            continue;
++        }
++        uint32_t pc = start;
++        while (pc < end && pc < ops_.size()) {
++            reached[pc] = true;
++            const Op& op = ops_[pc];
++            const uint32_t destination = (op.word >> 10) & 0xFFF;
++            const uint32_t count = op.word & 0xFF;
++            bool stop = false, jumped = false;
++            switch (op.opcode) {
++            case Opcode::End:
++                stop = true;
++                break;
++            case Opcode::Call:
++            case Opcode::CallC:
++            case Opcode::CallU:
++                ranges.emplace_back(destination, destination + count);
++                break;
++            case Opcode::JmpC:
++            case Opcode::JmpU:
++                ranges.emplace_back(destination, end);
++                break;
++            case Opcode::IfC:
++            case Opcode::IfU: {
++                const IfRanges r = GetIfRanges(pc, destination, count);
++                ranges.emplace_back(r.then_start, r.then_end);
++                ranges.emplace_back(r.else_start, r.else_end);
++                if (r.next <= pc) {
++                    stop = true;
++                } else {
++                    pc = r.next;
++                    jumped = true;
++                }
++                break;
++            }
++            case Opcode::Loop:
++                ranges.emplace_back(pc + 1, destination + 1);
++                if (destination < pc) {
++                    stop = true;
++                } else {
++                    pc = destination + 1;
++                    jumped = true;
++                }
++                break;
++            default:
++                break;
++            }
++            if (stop) {
++                break;
++            }
++            if (jumped) {
++                continue;
++            }
++            ++pc;
++        }
++    }
++    return reached;
++}
++
++std::pair<Mask96, Mask96> Program::UniformsFeeding(uint32_t entry, uint16_t outputs) const {
++    const std::vector<bool> reached = Reached(entry);
++    // outputs 0x00 to 0x0F and temporaries 0x10 to 0x1F, as both destinations and sources
++    // number them
++    uint32_t wanted = outputs;
++    Mask96 uniforms, indexed;
++    for (;;) {
++        const uint32_t wanted_before = wanted;
++        const Mask96 uniforms_before = uniforms, indexed_before = indexed;
++        for (size_t i = 0; i < ops_.size(); ++i) {
++            if (!reached[i]) {
++                continue;
++            }
++            const Op& op = ops_[i];
++            int sources;
++            switch (op.opcode) {
++            case Opcode::Mad:
++            case Opcode::MadI:
++                sources = 3;
++                break;
++            case Opcode::Mov: case Opcode::Rcp: case Opcode::Rsq: case Opcode::Ex2:
++            case Opcode::Lg2: case Opcode::Flr: case Opcode::LitP:
++                sources = 1;
++                break;
++            default:
++                if (!Writes(op.opcode)) {
++                    continue;
++                }
++                sources = 2;
++            }
++            if (op.destination >= 0x20 || !(wanted & (1u << op.destination))) {
++                continue;
++            }
++            for (int s = 0; s < sources; ++s) {
++                const Operand& source = op.src[s];
++                if (source.reg >= 0x10 && source.reg <= 0x1F) {
++                    wanted |= 1u << source.reg;
++                } else if (source.reg >= 0x20 && source.reg <= 0x7F) {
++                    if (source.index != 0) {
++                        indexed |= Mask96::From(static_cast<int>(source.reg - 0x20));
++                    } else {
++                        uniforms |= Mask96::Bit(static_cast<int>(source.reg - 0x20));
++                    }
++                }
++            }
++        }
++        if (wanted == wanted_before && uniforms == uniforms_before && indexed == indexed_before) {
++            return {uniforms & Mask96::All(), indexed & Mask96::All()};
++        }
++    }
++}
++
++std::pair<Mask96, Mask96> Program::PlacingUniforms(uint32_t entry, uint16_t outputs,
++                                                   uint16_t coordinates) const {
++    const auto [direct, indexed] = UniformsFeeding(entry, outputs);
++    const auto [textured, textured_indexed] = UniformsFeeding(entry, coordinates);
++    const Mask96 own = direct | (indexed & ~(textured | textured_indexed));
++    const Mask96 shared = indexed & textured_indexed & ~textured & ~own;
++    return {own, shared};
++}
++
++// ---------------------------------------------------------------------------------------------
++// Matching draws
++// ---------------------------------------------------------------------------------------------
++
++namespace {
++
++/// How much a component's move from one frame to the next may differ from its move the frame
++/// before, before the draw counts as a different one, a jump rather than a move, which is drawn
++/// as it is. A model in the distance or the camera going on as it went moves as it did however
++/// fast, a camera cutting elsewhere, another model taken for this one or a flag kept in a float
++/// do not. A component of a rotation turning faster by less than about 30 degrees moves less
++/// than half again, a translation less than a quarter of its distance again.
++constexpr float JUMP = 0.5f;
++constexpr float JUMP_PART = 0.25f;
++
++/// How many draws of the frame before drawn the same way a draw's match is looked for among,
++/// around its own place among them.
++constexpr size_t NEAREST = 32;
++
++/// For how many frames after jumping a draw that jumps again counts as one that keeps jumping
++/// rather than as a camera cutting elsewhere. A sprite's animation that steps every other frame
++/// jumps every other frame.
++constexpr uint8_t RESTLESS = 4;
++
++/// Whether a component a texture's coordinates may read steps from one round value to another,
++/// sixty-fourths, as a sprite's offset into its sheet of them does, rather than moves, as a
++/// matrix's does.
++bool Steps(float before, float now) {
++    const auto round = [](float v) { return std::fmod(v * 64.0f, 1.0f) == 0.0f; };
++    return round(before) && round(now);
++}
++
++} // namespace
++
++const Uniforms* FrameInterpolator::Draw(const DrawDesc& desc, bool between) {
++    ++draws_;
++    Drawn& own_frame = now_[desc.key];
++    own_frame.uniforms.push_back(*desc.uniforms);
++    own_frame.moves.push_back(Uniforms{});
++    own_frame.restless.push_back(0);
++    const size_t place = own_frame.uniforms.size() - 1;
++    if (!between) {
++        return nullptr;
++    }
++    const auto before_it = before_.find(desc.key);
++    if (desc.geometry) {
++        if (before_it != before_.end() && place < before_it->second.uniforms.size()) {
++            ++matched_;
++        }
++        return nullptr;
++    }
++
++    Mask96 placing = Mask96::All(), shared;
++    if (desc.program) {
++        const PlacingKey pk{desc.program_id, desc.entry, desc.outputs, desc.coordinates};
++        auto it = placing_.find(pk);
++        if (it == placing_.end()) {
++            it = placing_
++                     .emplace(pk, desc.program->PlacingUniforms(desc.entry, desc.outputs,
++                                                                desc.coordinates))
++                     .first;
++        }
++        placing = it->second.first;
++        shared = it->second.second;
++    }
++    if (before_it == before_.end()) {
++        return nullptr;
++    }
++    Drawn& drawn = before_it->second;
++    const Mask96 placed_mask = placing | shared;
++
++    // The draw of the frame before, among those drawn the same way and not taken yet, whose
++    // uniforms placing the vertices are nearest a draw's, around its place among them, the one
++    // at its place when that is as near. A title can draw a model twice in an order of its own
++    // each frame, and in the order they came they would swap places.
++    const Uniforms& now_uniforms = own_frame.uniforms[place];
++    const auto distance = [&](const Uniforms& before) {
++        float total = 0.0f;
++        for (int u = 0; u < FLOAT_UNIFORMS; ++u) {
++            if (!placed_mask.Test(u)) {
++                continue;
++            }
++            for (int i = 0; i < 4; ++i) {
++                total += std::fabs(before[u][i] - now_uniforms[u][i]);
++            }
++        }
++        // NaN as far as anything gets
++        return std::isnan(total) ? std::numeric_limits<float>::infinity() : total;
++    };
++    const size_t count = drawn.uniforms.size();
++    size_t around_begin = 0, around_end = count;
++    if (count > NEAREST) {
++        around_begin = place > NEAREST / 2 ? place - NEAREST / 2 : 0;
++        around_end = std::min(place + NEAREST / 2, count);
++    }
++    std::optional<std::pair<size_t, float>> best;
++    if (place < count && !drawn.taken[place]) {
++        const float d = distance(drawn.uniforms[place]);
++        if (d == 0.0f) {
++            best = {place, d};
++            around_begin = around_end; // nothing nearer than nothing
++        } else {
++            best = {place, d};
++        }
++    }
++    for (size_t i = around_begin; i < around_end; ++i) {
++        if (i == place || drawn.taken[i]) {
++            continue;
++        }
++        const float d = distance(drawn.uniforms[i]);
++        if (!best || d < best->second) {
++            best = {i, d};
++        }
++    }
++    if (!best) {
++        return nullptr;
++    }
++    const size_t found = best->first;
++    drawn.taken[found] = true;
++
++    const Uniforms& before = drawn.uniforms[found];
++    const Uniforms& moved_before = drawn.moves[found];
++    const uint8_t restless = drawn.restless[found];
++    Uniforms& moved_now = own_frame.moves[place];
++    uint8_t& still_restless = own_frame.restless[place];
++    still_restless = restless > 0 ? restless - 1 : 0;
++    for (int u = 0; u < FLOAT_UNIFORMS; ++u) {
++        for (int i = 0; i < 4; ++i) {
++            moved_now[u][i] = now_uniforms[u][i] - before[u][i];
++        }
++    }
++    ++matched_;
++
++    const auto is_shared = [&](int u) { return shared.Test(u); };
++    // what moves: the components that changed of the uniforms placing the vertices, but for
++    // steps of those the coordinates may read
++    const auto moves = [&](int u, float b, float n) {
++        return placed_mask.Test(u) && b != n && !(is_shared(u) && Steps(b, n));
++    };
++    bool any_change = false;
++    for (int u = 0; u < FLOAT_UNIFORMS && !any_change; ++u) {
++        for (int i = 0; i < 4; ++i) {
++            if (moves(u, before[u][i], now_uniforms[u][i])) {
++                any_change = true;
++                break;
++            }
++        }
++    }
++    if (!any_change) {
++        return nullptr;
++    }
++
++    bool jumped = false, lerped = false;
++    // a component jumps when its move differs from its move the frame before by more than JUMP
++    // says. NaN and infinity compare false, and jump
++    const auto jumps = [](float b, float n, float moved_b) {
++        const float change = std::fabs(n - b - moved_b);
++        return !(change <= JUMP || change <= JUMP_PART * std::max(std::fabs(b), std::fabs(n)));
++    };
++    for (int u = 0; u < FLOAT_UNIFORMS; ++u) {
++        std::array<bool, 4> moving{}, jumping{};
++        bool any_jump = false, any_move = false;
++        for (int i = 0; i < 4; ++i) {
++            moving[i] = moves(u, before[u][i], now_uniforms[u][i]);
++            jumping[i] = moving[i] && jumps(before[u][i], now_uniforms[u][i], moved_before[u][i]);
++            any_jump |= jumping[i];
++            any_move |= moving[i];
++        }
++        if (any_jump) {
++            // one the coordinates may read too is as the frame has it, whatever it is, one that
++            // only places the vertices says the draw is another than the one before
++            if (!is_shared(u)) {
++                jumped = true;
++                break;
++            }
++            between_[u] = now_uniforms[u];
++            continue;
++        }
++        for (int i = 0; i < 4; ++i) {
++            between_[u][i] = moving[i]
++                                 ? before[u][i] + (now_uniforms[u][i] - before[u][i]) * 0.5f
++                                 : now_uniforms[u][i];
++        }
++        lerped |= any_move;
++    }
++    if (!jumped && !lerped) {
++        // what moved jumped, and is as the frame has it
++        return nullptr;
++    }
++    if (jumped) {
++        if (restless == 0) {
++            ++jumped_;
++        } else {
++            ++jumping_;
++        }
++        still_restless = RESTLESS;
++        return nullptr;
++    }
++    ++moved_;
++    return &between_;
++}
++
++Matches FrameInterpolator::FrameDone() {
++    const Matches matches{draws_, matched_, moved_, jumped_, jumping_};
++    // the draws of this frame are the ones the next frame's match
++    std::swap(before_, now_);
++    for (auto& [key, drawn] : before_) {
++        drawn.taken.assign(drawn.uniforms.size(), false);
++    }
++    // emptied, with the lists of the draws that frame had, which the next one mostly draws too
++    for (auto it = now_.begin(); it != now_.end();) {
++        Drawn& drawn = it->second;
++        const bool kept = !drawn.uniforms.empty();
++        drawn.uniforms.clear();
++        drawn.moves.clear();
++        drawn.restless.clear();
++        drawn.taken.clear();
++        it = kept ? std::next(it) : now_.erase(it);
++    }
++    draws_ = matched_ = moved_ = jumped_ = jumping_ = 0;
++    return matches;
++}
++
++} // namespace FrameInterp
+diff -ruN a/src/video_core/frame_interp/frame_interp.h b/src/video_core/frame_interp/frame_interp.h
+--- a/src/video_core/frame_interp/frame_interp.h	1970-01-01 00:00:00.000000000 +0000
++++ b/src/video_core/frame_interp/frame_interp.h	2026-10-27 23:48:29.138233874 +0000
+@@ -0,0 +1,225 @@
++// Copyright 2026 Azahar Emulator Project
++// Licensed under GPLv2 or any later version
++// Refer to the license.txt file included.
++//
++// Frame interpolation, stage A: matching the draws of a frame with those of the frame before
++// and working out how they move. The algorithm and its constants come from Zakuro's
++// zakuro-gpu/src/interpolation.rs and shader analysis (zakuro-gpu/src/shader/mod.rs), ported to
++// C++. This file has no Azahar dependency, so it can be built and tested on its own
++// (tools/frame-interp-test).
++//
++// What it decides: for each draw, are the vertex shader's float uniforms that place the
++// vertices (the matrices) moving smoothly since the matching draw of the last frame, and what
++// would they be halfway in between. Nothing is rendered from this yet: stage B (twin buffers,
++// replaying the draws halfway) is not written.
++
++#pragma once
++
++#include <array>
++#include <cstddef>
++#include <cstdint>
++#include <memory>
++#include <unordered_map>
++#include <utility>
++#include <vector>
++
++namespace FrameInterp {
++
++constexpr int FLOAT_UNIFORMS = 96;
++using Vec4 = std::array<float, 4>;
++using Uniforms = std::array<Vec4, FLOAT_UNIFORMS>;
++
++/// One bit for each of the 96 float uniforms.
++struct Mask96 {
++    uint64_t lo = 0; // uniforms 0..63
++    uint64_t hi = 0; // uniforms 64..95, in the low 32 bits
++
++    static Mask96 Bit(int i) {
++        Mask96 m;
++        (i < 64 ? m.lo : m.hi) |= uint64_t{1} << (i & 63);
++        return m;
++    }
++    /// Uniforms i and every one above it.
++    static Mask96 From(int i) {
++        Mask96 m;
++        for (int u = i; u < FLOAT_UNIFORMS; ++u) {
++            m |= Bit(u);
++        }
++        return m;
++    }
++    static Mask96 All() {
++        return From(0);
++    }
++    bool Test(int i) const {
++        return ((i < 64 ? lo : hi) >> (i & 63)) & 1;
++    }
++    bool Any() const {
++        return (lo | hi) != 0;
++    }
++    Mask96& operator|=(const Mask96& o) {
++        lo |= o.lo;
++        hi |= o.hi;
++        return *this;
++    }
++    friend Mask96 operator|(Mask96 a, const Mask96& b) {
++        return a |= b;
++    }
++    friend Mask96 operator&(const Mask96& a, const Mask96& b) {
++        return {a.lo & b.lo, a.hi & b.hi};
++    }
++    friend Mask96 operator~(const Mask96& a) {
++        return {~a.lo, ~a.hi & 0xFFFFFFFFull};
++    }
++    friend bool operator==(const Mask96& a, const Mask96& b) {
++        return a.lo == b.lo && a.hi == b.hi;
++    }
++    friend bool operator!=(const Mask96& a, const Mask96& b) {
++        return !(a == b);
++    }
++};
++
++// ---------------------------------------------------------------------------------------------
++// Shader analysis: which float uniforms feed which output registers.
++// ---------------------------------------------------------------------------------------------
++
++enum class Opcode : uint8_t {
++    Add, Dp3, Dp4, Dph, Dst, Ex2, Lg2, LitP, Mul, Sge, Slt, Flr, Max, Min, Rcp, Rsq, Mova, Mov,
++    DphI, DstI, SgeI, SltI, Break, Nop, End, BreakC, Call, CallC, CallU, IfU, IfC, Loop, Emit,
++    SetEmit, JmpC, JmpU, Cmp, MadI, Mad, Unknown,
++};
++
++struct Operand {
++    uint32_t reg = 0;   // 0x00-0x0F inputs, 0x10-0x1F temporaries, 0x20-0x7F float uniforms
++    uint32_t index = 0; // the address register offsetting it, 0 for none
++};
++
++struct Op {
++    uint32_t word = 0;
++    Opcode opcode = Opcode::Unknown;
++    uint32_t destination = 0;
++    Operand src[3];
++};
++
++/// A vertex shader program, decoded once from its instruction words.
++class Program {
++public:
++    static std::shared_ptr<const Program> Decode(const uint32_t* words, size_t count);
++
++    /// The float uniforms that what lands in `outputs` (one bit per output register 0..15)
++    /// can come from, among what the program can run from `entry`: first those read as they
++    /// are, then those read through an address register, which can be any from the one named
++    /// on. Address registers and conditions are left out: they pick what runs, they do not
++    /// feed what it works out.
++    std::pair<Mask96, Mask96> UniformsFeeding(uint32_t entry, uint16_t outputs) const;
++
++    /// The uniforms that place the vertices, and those the texture coordinates may read
++    /// through an address register too, which are moved but for steps between round values
++    /// (a sprite's offset into its sheet). `outputs` places the vertices, `coordinates` are the
++    /// outputs carrying texture coordinates.
++    std::pair<Mask96, Mask96> PlacingUniforms(uint32_t entry, uint16_t outputs,
++                                              uint16_t coordinates) const;
++
++    size_t Size() const {
++        return ops_.size();
++    }
++
++private:
++    std::vector<bool> Reached(uint32_t entry) const;
++    std::vector<Op> ops_;
++};
++
++// ---------------------------------------------------------------------------------------------
++// Matching the draws of a frame with the frame before's.
++// ---------------------------------------------------------------------------------------------
++
++/// How the draws of a frame went. Of those the frame before had too: those that moved, those
++/// that jumped, and those that jumped a few frames before too (a batch of sprites sorted anew
++/// each frame, or a flag that flips).
++struct Matches {
++    uint32_t draws = 0;
++    uint32_t matched = 0;
++    uint32_t moved = 0;
++    uint32_t jumped = 0;
++    uint32_t jumping = 0;
++
++    /// Whether a picture in between would look right: most draws were there the frame before,
++    /// and few of those that had not jumped lately jumped now, as everything does when the
++    /// camera cuts.
++    bool Smooth() const {
++        return moved > 0 && matched * 2 >= draws && jumped * 4 <= matched;
++    }
++    friend bool operator==(const Matches& a, const Matches& b) {
++        return a.draws == b.draws && a.matched == b.matched && a.moved == b.moved &&
++               a.jumped == b.jumped && a.jumping == b.jumping;
++    }
++};
++
++/// What the interpolator needs to know of a draw.
++struct DrawDesc {
++    /// What the draw draws, the same from frame to frame for a model drawn the same way: its
++    /// programs, vertex arrays, the buffers it draws into and its first texture.
++    uint64_t key = 0;
++    /// The vertex shader's float uniforms at the draw.
++    const Uniforms* uniforms = nullptr;
++    /// A draw through a geometry shader is counted, never moved.
++    bool geometry = false;
++    /// For working out which uniforms place the vertices. Without a program every uniform
++    /// counts as placing.
++    const Program* program = nullptr;
++    uint64_t program_id = 0;
++    uint32_t entry = 0;
++    uint16_t outputs = 0;
++    uint16_t coordinates = 0;
++};
++
++class FrameInterpolator {
++public:
++    /// Records the draw for the next frame to match, and gives the uniforms halfway between
++    /// its own and its match's from the frame before: null when they are the same, when it has
++    /// no match, when it jumped, or when `between` is false. The pointer stays valid until the
++    /// next call.
++    const Uniforms* Draw(const DrawDesc& desc, bool between = true);
++
++    /// The frame is done: its draws are the ones the next frame's match. Returns how this
++    /// frame's draws matched the one before's.
++    Matches FrameDone();
++
++    /// Draws recorded since the last FrameDone.
++    uint32_t DrawsThisFrame() const {
++        return draws_;
++    }
++
++private:
++    struct Drawn {
++        std::vector<Uniforms> uniforms;
++        std::vector<Uniforms> moves; // how far each one's uniforms moved since the frame before
++        std::vector<uint8_t> restless;
++        std::vector<bool> taken; // which a draw of the next frame took for its own
++    };
++    struct PlacingKey {
++        uint64_t program_id;
++        uint32_t entry;
++        uint16_t outputs;
++        uint16_t coordinates;
++        bool operator==(const PlacingKey& o) const {
++            return program_id == o.program_id && entry == o.entry && outputs == o.outputs &&
++                   coordinates == o.coordinates;
++        }
++    };
++    struct PlacingKeyHash {
++        size_t operator()(const PlacingKey& k) const {
++            uint64_t h = k.program_id * 0x9E3779B97F4A7C15ull;
++            h ^= (uint64_t{k.entry} << 32 | uint64_t{k.outputs} << 16 | k.coordinates) +
++                 0x7F4A7C15ull + (h << 6) + (h >> 2);
++            return static_cast<size_t>(h);
++        }
++    };
++
++    std::unordered_map<uint64_t, Drawn> before_;
++    std::unordered_map<uint64_t, Drawn> now_;
++    std::unordered_map<PlacingKey, std::pair<Mask96, Mask96>, PlacingKeyHash> placing_;
++    Uniforms between_{};
++    uint32_t draws_ = 0, matched_ = 0, moved_ = 0, jumped_ = 0, jumping_ = 0;
++};
++
++} // namespace FrameInterp
+diff -ruN a/src/video_core/frame_interp/frame_interp_driver.cpp b/src/video_core/frame_interp/frame_interp_driver.cpp
+--- a/src/video_core/frame_interp/frame_interp_driver.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/src/video_core/frame_interp/frame_interp_driver.cpp	2026-10-27 23:48:29.146581888 +0000
+@@ -0,0 +1,244 @@
++// Copyright 2026 Azahar Emulator Project
++// Licensed under GPLv2 or any later version
++// Refer to the license.txt file included.
++
++#include "video_core/frame_interp/frame_interp_driver.h"
++
++#include <algorithm>
++#include <bit>
++#include <cstdlib>
++
++#include "common/logging/log.h"
++#include "video_core/pica/pica_core.h"
++
++namespace FrameInterp {
++
++bool Enabled() {
++    static const bool enabled = [] {
++        const char* v = std::getenv("AZAHAR_FRAME_INTERP");
++        return v && v[0] == '1';
++    }();
++    return enabled;
++}
++
++namespace {
++
++u64 Mix(u64 hash, u64 word) {
++    return (std::rotl(hash, 5) ^ word) * 0x517CC1B722220A95ull;
++}
++
++/// What a draw draws, the same from frame to frame for a model drawn the same way: its
++/// programs, its vertex arrays, and the buffers it draws into and its first texture. The
++/// register numbers are the PICA's own (the same as the index into the register file).
++u64 DrawKey(const Pica::RegsInternal& regs, u64 vs_hash, u32 vs_entry, bool geometry, u64 gs_hash,
++            u32 gs_entry) {
++    constexpr u32 REG_TEXTURE0_ADDRESS = 0x0085;
++    constexpr u32 REG_DEPTH_BUFFER_ADDRESS = 0x011C;
++    constexpr u32 REG_COLOR_BUFFER_ADDRESS = 0x011D;
++    constexpr u32 REG_ATTRIBUTE_BASE = 0x0200;
++    constexpr u32 REG_INDEX_ARRAY = 0x0227;
++    constexpr u32 REG_VERTEX_COUNT = 0x0228;
++    constexpr u32 REG_GEOSTAGE_CONFIG = 0x0229;
++    constexpr u32 REG_VERTEX_OFFSET = 0x022A;
++    constexpr u32 REG_PRIMITIVE_CONFIG = 0x025E;
++
++    // from an odd start, so that words of zero still count
++    u64 hash = Mix(Mix(0x9E3779B97F4A7C15ull, vs_hash), vs_entry);
++    if (geometry) {
++        hash = Mix(Mix(Mix(hash, 1), gs_hash), gs_entry);
++    }
++    const auto& r = regs.reg_array;
++    for (u32 reg = REG_ATTRIBUTE_BASE; reg <= REG_INDEX_ARRAY; ++reg) {
++        hash = Mix(hash, r[reg]);
++    }
++    for (const u32 reg : {REG_VERTEX_COUNT, REG_VERTEX_OFFSET, REG_PRIMITIVE_CONFIG,
++                          REG_GEOSTAGE_CONFIG, REG_COLOR_BUFFER_ADDRESS, REG_DEPTH_BUFFER_ADDRESS,
++                          REG_TEXTURE0_ADDRESS}) {
++        hash = Mix(hash, r[reg]);
++    }
++    return hash;
++}
++
++} // namespace
++
++/// The vertex shader's outputs are the registers the output mask enables, in order: attribute 2
++/// is the third enabled register, which is not necessarily o2.
++void PlacingOutputs(const Pica::RegsInternal& regs, u16& placing, u16& coordinates) {
++    const u32 total = std::min<u32>(static_cast<u32>(regs.rasterizer.vs_output_total), 7);
++    constexpr int NONE = -1;
++    // attribute slot of each semantic
++    int position[4] = {0, 0, 0, 0};
++    int quaternion[4] = {NONE, NONE, NONE, NONE};
++    int view[3] = {NONE, NONE, NONE};
++    int texcoord[3][2] = {{3, 3}, {NONE, NONE}, {NONE, NONE}}; // the default, see below
++    bool saw_position = false;
++    if (total != 0) {
++        int tex[3][2] = {{NONE, NONE}, {NONE, NONE}, {NONE, NONE}};
++        for (u32 attribute = 0; attribute < total; ++attribute) {
++            const u32 word = regs.rasterizer.vs_output_attributes[attribute].raw;
++            for (u32 component = 0; component < 4; ++component) {
++                const u32 semantic = (word >> (component * 8)) & 0x1F;
++                const int slot = static_cast<int>(attribute);
++                if (semantic <= 3) {
++                    position[semantic] = slot;
++                    saw_position = true;
++                } else if (semantic <= 7) {
++                    quaternion[semantic - 4] = slot;
++                } else if (semantic >= 12 && semantic <= 13) {
++                    tex[0][semantic - 12] = slot;
++                } else if (semantic >= 14 && semantic <= 15) {
++                    tex[1][semantic - 14] = slot;
++                } else if (semantic >= 18 && semantic <= 20) {
++                    view[semantic - 18] = slot;
++                } else if (semantic >= 22 && semantic <= 23) {
++                    tex[2][semantic - 22] = slot;
++                }
++            }
++        }
++        if (saw_position) {
++            for (int s = 0; s < 3; ++s) {
++                texcoord[s][0] = tex[s][0];
++                texcoord[s][1] = tex[s][1];
++            }
++        }
++    }
++    if (!saw_position) {
++        // the layout picasso/nihstro assign when the registers describe nothing at all
++        for (int& p : position) {
++            p = 0;
++        }
++        for (int& q : quaternion) {
++            q = NONE;
++        }
++        for (int& v : view) {
++            v = NONE;
++        }
++    }
++
++    // the output register behind an attribute: the nth one the mask enables
++    const u32 mask = static_cast<u32>(regs.vs.output_mask) & 0xFFFF;
++    const auto register_of = [mask](int attribute) -> int {
++        int seen = 0;
++        for (int reg = 0; reg < 16; ++reg) {
++            if (mask != 0 && !(mask & (1u << reg))) {
++                continue;
++            }
++            if (seen++ == attribute) {
++                return reg;
++            }
++        }
++        return NONE;
++    };
++    placing = 0;
++    coordinates = 0;
++    const auto add = [&](u16& out, int attribute) {
++        if (attribute == NONE) {
++            return;
++        }
++        const int reg = register_of(attribute);
++        if (reg != NONE) {
++            out |= static_cast<u16>(1u << reg);
++        }
++    };
++    for (const int a : position) add(placing, a);
++    for (const int a : quaternion) add(placing, a);
++    for (const int a : view) add(placing, a);
++    for (const auto& set : texcoord) {
++        for (const int a : set) add(coordinates, a);
++    }
++}
++
++void Driver::OnDraw(Pica::PicaCore& pica, bool accelerate) {
++    const auto start = std::chrono::steady_clock::now();
++    std::lock_guard lock{mutex};
++    ++draws;
++    if (!accelerate) {
++        // shaded on the CPU: what moves is in the vertices, not in the uniforms
++        ++software_draws;
++        return;
++    }
++    const auto& regs = pica.regs.internal;
++    const bool geometry = regs.pipeline.use_gs == Pica::PipelineRegs::UseGS::Yes;
++    geometry_draws += geometry;
++
++    auto& setup = pica.vs_setup;
++    const u64 vs_hash = setup.GetProgramCodeHash() ^ (setup.GetSwizzleDataHash() * 31);
++    auto it = programs.find(vs_hash);
++    if (it == programs.end()) {
++        if (programs.size() > 256) {
++            programs.clear();
++        }
++        const u32 size = std::min<u32>(setup.GetBiggestProgramSize(), Pica::MAX_PROGRAM_CODE_LENGTH);
++        it = programs
++                 .emplace(vs_hash, size ? Program::Decode(setup.GetProgramCode().data(), size)
++                                        : std::shared_ptr<const Program>{})
++                 .first;
++    }
++
++    for (int i = 0; i < FLOAT_UNIFORMS; ++i) {
++        const auto& v = setup.uniforms.f[i];
++        uniforms[i] = {v.x.ToFloat32(), v.y.ToFloat32(), v.z.ToFloat32(), v.w.ToFloat32()};
++    }
++
++    DrawDesc desc;
++    u64 gs_hash = 0;
++    u32 gs_entry = 0;
++    if (geometry) {
++        gs_hash = pica.gs_setup.GetProgramCodeHash();
++        gs_entry = pica.gs_setup.entry_point;
++    }
++    desc.key = DrawKey(regs, vs_hash, setup.entry_point, geometry, gs_hash, gs_entry);
++    desc.uniforms = &uniforms;
++    desc.geometry = geometry;
++    desc.program = it->second.get();
++    desc.program_id = vs_hash;
++    desc.entry = setup.entry_point;
++    PlacingOutputs(regs, desc.outputs, desc.coordinates);
++    interpolator.Draw(desc); // analysis only: what comes back is not drawn
++
++    cost += std::chrono::steady_clock::now() - start;
++    ++timed_draws;
++}
++
++void Driver::OnFrameBoundary() {
++    std::lock_guard lock{mutex};
++    const auto now = std::chrono::steady_clock::now();
++    // a refresh the game drew nothing in is not a frame of its own
++    if (interpolator.DrawsThisFrame() > 0) {
++        const Matches m = interpolator.FrameDone();
++        ++frames;
++        matched += m.matched;
++        moved += m.moved;
++        jumped += m.jumped;
++        jumping += m.jumping;
++        smooth_frames += m.Smooth();
++    }
++    if (now - last_report >= report_every) {
++        Report(now);
++    }
++}
++
++void Driver::Report(std::chrono::steady_clock::time_point now) {
++    const double secs = std::chrono::duration<double>(now - last_report).count();
++    if (frames > 0 && draws > 0) {
++        const auto pct = [&](u64 n) { return 100.0 * static_cast<double>(n) / draws; };
++        LOG_INFO(Render,
++                 "frame interpolation analysis (nothing is drawn from it): {:.1f} game frames/s, "
++                 "{:.0f} draws/frame ({:.1f} on the CPU, {:.1f} geometry); {:.0f}% matched the frame "
++                 "before, {:.0f}% moved smoothly, {:.1f}% jumped (+{:.1f}% keep jumping); {:.0f}% "
++                 "of frames smooth; analysis cost {:.1f} us/draw",
++                 frames / secs, static_cast<double>(draws) / frames,
++                 static_cast<double>(software_draws) / frames,
++                 static_cast<double>(geometry_draws) / frames, pct(matched), pct(moved), pct(jumped), pct(jumping),
++                 100.0 * smooth_frames / frames,
++                 timed_draws ? std::chrono::duration<double, std::micro>(cost).count() / timed_draws
++                             : 0.0);
++    }
++    frames = draws = matched = moved = jumped = jumping = 0;
++    smooth_frames = software_draws = geometry_draws = 0;
++    cost = std::chrono::nanoseconds{0};
++    timed_draws = 0;
++    last_report = now;
++}
++
++} // namespace FrameInterp
+diff -ruN a/src/video_core/frame_interp/frame_interp_driver.h b/src/video_core/frame_interp/frame_interp_driver.h
+--- a/src/video_core/frame_interp/frame_interp_driver.h	1970-01-01 00:00:00.000000000 +0000
++++ b/src/video_core/frame_interp/frame_interp_driver.h	2026-10-27 23:48:29.143736950 +0000
+@@ -0,0 +1,64 @@
++// Copyright 2026 Azahar Emulator Project
++// Licensed under GPLv2 or any later version
++// Refer to the license.txt file included.
++
++#pragma once
++
++#include <chrono>
++#include <memory>
++#include <mutex>
++#include <unordered_map>
++
++#include "common/common_types.h"
++#include "video_core/frame_interp/frame_interp.h"
++
++namespace Pica {
++class PicaCore;
++struct RegsInternal;
++} // namespace Pica
++
++namespace FrameInterp {
++
++/// Whether frame interpolation analysis is on (environment variable AZAHAR_FRAME_INTERP=1, set
++/// from the app's settings). Off by default.
++bool Enabled();
++
++/// The output registers that place a vertex (its position, and the normal and the view the
++/// lighting takes) and those that carry its textures' coordinates, one bit each, as the
++/// vertex shader output map and mask describe them.
++void PlacingOutputs(const Pica::RegsInternal& regs, u16& placing, u16& coordinates);
++
++/// Stage A of frame interpolation: reads each accelerated draw's state off the PICA registers,
++/// matches it with the frame before's draws, and logs how well that goes every few seconds. It
++/// draws nothing and changes nothing the game or the renderer sees.
++class Driver {
++public:
++    explicit Driver(std::chrono::milliseconds report_every = std::chrono::seconds(5))
++        : report_every{report_every} {}
++
++    /// A draw is about to be rendered. `accelerate` says the vertex shader runs on the GPU, so
++    /// its matrices are in the float uniforms; a draw shaded on the CPU is only counted.
++    void OnDraw(Pica::PicaCore& pica, bool accelerate);
++
++    /// A frame was presented. The game's frame is over if it drew anything since the last one,
++    /// which at 30 fps is every other time.
++    void OnFrameBoundary();
++
++private:
++    void Report(std::chrono::steady_clock::time_point now);
++
++    std::chrono::milliseconds report_every;
++    std::mutex mutex;
++    FrameInterpolator interpolator;
++    std::unordered_map<u64, std::shared_ptr<const Program>> programs;
++    Uniforms uniforms{};
++
++    // counted since the last report
++    u64 frames = 0, draws = 0, matched = 0, moved = 0, jumped = 0, jumping = 0;
++    u64 smooth_frames = 0, software_draws = 0, geometry_draws = 0;
++    std::chrono::nanoseconds cost{0};
++    u64 timed_draws = 0;
++    std::chrono::steady_clock::time_point last_report{std::chrono::steady_clock::now()};
++};
++
++} // namespace FrameInterp
+diff -ruN a/src/video_core/renderer_vulkan/vk_rasterizer.cpp b/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.cpp	2026-10-27 23:48:29.135356306 +0000
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.cpp	2026-10-27 23:48:29.132421011 +0000
+@@ -145,6 +145,9 @@
+ void RasterizerVulkan::TickFrame() {
+     scheduler.WaitWorker();
+     res_cache.TickFrame();
++    if (frame_interp) {
++        frame_interp->OnFrameBoundary();
++    }
+ }
+ 
+ void RasterizerVulkan::LoadDefaultDiskResources(
+@@ -543,6 +546,12 @@
+ 
+ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
+     MICROPROFILE_SCOPE(Vulkan_Drawing);
++    if (FrameInterp::Enabled()) {
++        if (!frame_interp) {
++            frame_interp = std::make_unique<FrameInterp::Driver>();
++        }
++        frame_interp->OnDraw(pica, accelerate);
++    }
+     SyncDrawState();
+ 
+     const bool shadow_rendering = regs.framebuffer.IsShadowRendering();
+diff -ruN a/src/video_core/renderer_vulkan/vk_rasterizer.h b/src/video_core/renderer_vulkan/vk_rasterizer.h
+--- a/src/video_core/renderer_vulkan/vk_rasterizer.h	2026-10-27 23:48:29.129427054 +0000
++++ b/src/video_core/renderer_vulkan/vk_rasterizer.h	2026-10-27 23:48:29.126498665 +0000
+@@ -4,6 +4,7 @@
+ 
+ #pragma once
+ 
++#include "video_core/frame_interp/frame_interp_driver.h"
+ #include "video_core/rasterizer_accelerated.h"
+ #include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
+ #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+@@ -141,6 +142,10 @@
+     u32 uniform_size_aligned_vs;
+     u32 uniform_size_aligned_fs;
+     bool async_shaders{false};
++
++    /// Frame interpolation analysis (log only), made on the first draw when
++    /// AZAHAR_FRAME_INTERP=1; see video_core/frame_interp.
++    std::unique_ptr<FrameInterp::Driver> frame_interp;
+ };
+ 
+ } // namespace Vulkan

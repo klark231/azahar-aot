@@ -314,6 +314,11 @@ fun DisplayPage() = Page {
             flushDraws = it; Prefs.setApp("Display", "vk_flush_draws", it)
         }
         RowDivider()
+        var interpStats by remember { mutableStateOf(Prefs.getBool("Display", "frame_interp_stats", false)) }
+        ToggleRow("Frame interpolation analysis (log only)", "Experimental. Checks how well each draw lines up with the previous frame's and writes a summary to the log every few seconds. It draws nothing and changes nothing you see; it costs a little CPU. Applies on the next game start.", interpStats) {
+            interpStats = it; Prefs.setBool("Display", "frame_interp_stats", it)
+        }
+        RowDivider()
         var affinity by remember { mutableStateOf(Prefs.getApp("Display", "cpu_affinity", "default")) }
         ChoiceRow("CPU cores", "Controls which CPU cores the game's threads may use. \"Big + prime\" keeps them off the efficiency cores. \"Prime only\" places the game and the renderer on a single core, which can reduce performance. Applies on the next game start.",
             listOf("Default (Android decides)" to "default", "Big + prime" to "big", "Prime only" to "prime", "Little only" to "little"), affinity) {

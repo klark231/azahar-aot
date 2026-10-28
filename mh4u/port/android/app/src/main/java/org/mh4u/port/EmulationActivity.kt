@@ -332,11 +332,6 @@ class EmulationActivity : ComponentActivity(), SurfaceHolder.Callback {
     /** Back (the key, the gesture or the nav bar): chat, then the menu closes; otherwise the menu opens. */
     private fun handleBack() { if (layoutEditing) return; if (chatOpen) closeChat() else if (menuOpen) closeMenu() else openMenu() }
 
-    override fun onDestroy() {
-        LayoutEditor.opener = null
-        super.onDestroy()
-    }
-
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
         // the system's Back (a pad's B has a gamepad source and is the game's)
         if (e.keyCode == KeyEvent.KEYCODE_BACK && e.source and InputDevice.SOURCE_GAMEPAD != InputDevice.SOURCE_GAMEPAD) {
@@ -390,6 +385,7 @@ class EmulationActivity : ComponentActivity(), SurfaceHolder.Callback {
     }
 
     override fun onDestroy() {
+        LayoutEditor.opener = null
         super.onDestroy()
         saveLayout()
         if (Keyboard.host === this) Keyboard.host = null

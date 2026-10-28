@@ -1,0 +1,146 @@
+diff -ruN a/aot/src/arm_aot.cpp b/aot/src/arm_aot.cpp
+--- a/aot/src/arm_aot.cpp
++++ b/aot/src/arm_aot.cpp
+@@ -286,10 +286,40 @@
+     SyncTicks();
+ }
+ 
++namespace {
++/// The 3DS system calls a game makes most, by number (others show as hex only).
++const char* SvcName(u32 n) {
++    static const char* const names[] = {
++        "?", "ControlMemory", "QueryMemory", "ExitProcess", "GetProcessAffinityMask",
++        "SetProcessAffinityMask", "GetProcessIdealProcessor", "SetProcessIdealProcessor",
++        "CreateThread", "ExitThread", "SleepThread", "GetThreadPriority", "SetThreadPriority",
++        "GetThreadAffinityMask", "SetThreadAffinityMask", "GetThreadIdealProcessor",
++        "SetThreadIdealProcessor", "GetCurrentProcessorNumber", "Run", "CreateMutex",
++        "ReleaseMutex", "CreateSemaphore", "ReleaseSemaphore", "CreateEvent", "SignalEvent",
++        "ClearEvent", "CreateTimer", "SetTimer", "CancelTimer", "ClearTimer", "CreateMemoryBlock",
++        "MapMemoryBlock", "UnmapMemoryBlock", "CreateAddressArbiter", "ArbitrateAddress",
++        "CloseHandle", "WaitSynchronization1", "WaitSynchronizationN", "SignalAndWait",
++        "DuplicateHandle", "GetSystemTick", "GetHandleInfo", "GetSystemInfo", "GetProcessInfo",
++        "GetThreadInfo", "ConnectToPort", "SendSyncRequest1", "SendSyncRequest2",
++        "SendSyncRequest3", "SendSyncRequest4", "SendSyncRequest", "OpenProcess", "OpenThread",
++        "GetProcessId", "GetProcessIdOfThread", "GetThreadId", "GetResourceLimit",
++        "GetResourceLimitLimitValues", "GetResourceLimitCurrentValues", "GetThreadContext",
++        "Break", "OutputDebugString"};
++    return n < std::size(names) ? names[n] : "?";
++}
++} // namespace
++
+ bool ARM_AOT::HandleSvc() {
+     SyncTicks();
+     ++stats.svcs;
++    const u32 number = ctx->svc & 0xFF;
++    const auto started = std::chrono::steady_clock::now();
+     svc_context->CallSVC(ctx->svc);
++    const u64 ns = static_cast<u64>(
++        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
++            .count());
++    ++detail.svc_calls[number];
++    detail.svc_ns[number] += ns;
+     if (!SvcContinue() || reschedule || break_flag)
+         return false;
+     // The call may have programmed a timer event, so take the slice again.
+@@ -326,6 +356,43 @@
+              rate(s.fallback_batches, p.fallback_batches), rate(s.fallback_steps, p.fallback_steps),
+              100.0 * static_cast<double>(s.fallback_ns - p.fallback_ns) / (secs * 1e9),
+              rate(s.interpret_one, p.interpret_one), rate(s.lookups, p.lookups));
++    // where the time goes: system calls by number (calls, share of wall time, mean cost) and the
++    // addresses that went to the fallback CPU
++    if (s.svcs != p.svcs) {
++        std::array<u32, 256> order;
++        for (u32 i = 0; i < order.size(); ++i)
++            order[i] = i;
++        std::sort(order.begin(), order.end(),
++                  [&](u32 a, u32 b) { return detail.svc_ns[a] > detail.svc_ns[b]; });
++        u64 total_ns = 0;
++        for (u64 ns : detail.svc_ns)
++            total_ns += ns;
++        std::string top;
++        for (u32 i = 0; i < 6 && detail.svc_calls[order[i]] != 0; ++i) {
++            const u32 n = order[i];
++            top += fmt::format("{}{:#04x} {} {:.0f}/s {:.1f}% {:.2f}us each", top.empty() ? "" : "; ", n,
++                               SvcName(n), static_cast<double>(detail.svc_calls[n]) / secs,
++                               100.0 * static_cast<double>(detail.svc_ns[n]) / (secs * 1e9),
++                               static_cast<double>(detail.svc_ns[n]) / static_cast<double>(detail.svc_calls[n]) / 1e3);
++        }
++        LOG_INFO(Core_ARM11, "AOT svc core {}: {:.1f}% of wall time inside system calls; top by time: {}",
++                 GetID(), 100.0 * static_cast<double>(total_ns) / (secs * 1e9), top);
++    }
++    if (!detail.fallback.empty()) {
++        std::vector<std::pair<u32, Detail::Fallback>> entries(detail.fallback.begin(), detail.fallback.end());
++        std::sort(entries.begin(), entries.end(),
++                  [](const auto& a, const auto& b) { return a.second.batches > b.second.batches; });
++        std::string top;
++        for (std::size_t i = 0; i < entries.size() && i < 6; ++i) {
++            const auto& [pc, f] = entries[i];
++            top += fmt::format("{}{:08X}{} {:.0f}/s {:.1f} steps each", top.empty() ? "" : "; ", pc & ~1u,
++                               (pc & 1) ? " (thumb)" : "", static_cast<double>(f.batches) / secs,
++                               static_cast<double>(f.steps) / static_cast<double>(f.batches));
++        }
++        LOG_INFO(Core_ARM11, "AOT fallback core {}: {} distinct entry addresses; top by batches: {}",
++                 GetID(), entries.size(), top);
++    }
++    detail = Detail{};
+     last_stats = stats;
+     last_report = now;
+ }
+@@ -343,6 +410,8 @@
+ bool ARM_AOT::RunFallbackBatch() {
+     const auto started = std::chrono::steady_clock::now();
+     ++stats.fallback_batches;
++    const u32 entry_pc = ctx->r[15] | (ctx->thumb ? 1u : 0u);
++    u64 batch_steps = 0;
+     SyncTicks(); // the fallback charges the timer itself
+     PushToFallback();
+     in_fallback = true;
+@@ -350,6 +419,7 @@
+     while (true) {
+         fallback->Step();
+         ++stats.fallback_steps;
++        ++batch_steps;
+         if (reschedule || break_flag || GetTimer().GetDowncount() <= 0) {
+             keep_going = false;
+             break;
+@@ -364,6 +434,9 @@
+         granted = std::min<s64>(GetTimer().GetDowncount(), 0x7FFFFFFF - kBlockAllowance);
+         ctx->budget = static_cast<s32>(granted);
+     }
++    auto& entry = detail.fallback[entry_pc];
++    ++entry.batches;
++    entry.steps += batch_steps;
+     stats.fallback_ns += static_cast<u64>(
+         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started)
+             .count());
+diff -ruN a/aot/src/arm_aot.h b/aot/src/arm_aot.h
+--- a/aot/src/arm_aot.h
++++ b/aot/src/arm_aot.h
+@@ -14,6 +14,7 @@
+ 
+ #include <array>
+ #include <chrono>
++#include <unordered_map>
+ #include <memory>
+ #include <string>
+ 
+@@ -133,6 +134,19 @@
+     Stats stats;
+     Stats last_stats;
+     std::chrono::steady_clock::time_point last_report{};
++
++    // What the last report interval spent on, by system call number and by the address that went
++    // to the fallback CPU (cleared by each report).
++    struct Detail {
++        std::array<u64, 256> svc_calls{};
++        std::array<u64, 256> svc_ns{};  // wall time inside CallSVC
++        struct Fallback {
++            u64 batches = 0;
++            u64 steps = 0;
++        };
++        std::unordered_map<u32, Fallback> fallback;  // entry address (bit 0: Thumb) -> batches, steps
++    };
++    Detail detail;
+ };
+ 
+ /// Directory searched for `<TITLEID>.so` (3dsrecomp's naming). Default: $AZAHAR_AOT_DIR.

@@ -173,11 +173,6 @@ private val selectedBottomHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
 
     // ==================== VIEW LIFECYCLE ====================
 
-    override fun onSizeChanged(w: Int, h: Int, oldW: Int, oldH: Int) {
-        super.onSizeChanged(w, h, oldW, oldH)
-        loadLayoutSettings()
-    }
-
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         drawScreen(canvas, topScreenRect, topScreenPaint, topBorderPaint, topHandlePaint, selectedScreen == SelectedScreen.TOP, "Top Screen")
