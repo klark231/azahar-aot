@@ -29,6 +29,9 @@ struct Config {
 #else
     int resolution = 0;               ///< internal resolution, times the 3DS's; 0: from the window
 #endif
+    /// AzaharPlus's fractional scaling (Android): the internal resolution in percent of the
+    /// 3DS's, 150 = 1.5x, in steps of 50 from 50 to 1800. 0 = use `resolution`, whole multiples.
+    int resolution_percent = 0;
     bool vsync = true;
 #ifdef __ANDROID__
     bool accurate_mul = false;        ///< exact shader multiplication: slower, rarely needed
@@ -78,10 +81,6 @@ struct Config {
     /// Vulkan: draws in a render pass before its end is flushed (Mali/Qualcomm); 0 = Azahar's 20.
     /// Env AZAHAR_VK_FLUSH_DRAWS.
     int vk_flush_draws = 0;
-    /// Frame interpolation, stage A (needs patches/0007): matches each draw with the last
-    /// frame's and logs, every few seconds, how many matched and moved smoothly. Nothing is drawn
-    /// from it. Env AZAHAR_FRAME_INTERP.
-    bool frame_interp_stats = false;
     std::string texture_filter = "none";    ///< none, bicubic, scaleforce, xbrz, mmpx, anime4k
     std::string texture_sampling = "game";  ///< game, nearest, linear
     std::string shader;               ///< a post-processing shader, empty: none

@@ -116,6 +116,10 @@ Config Load() {
     c.renderer = str("Display", "renderer", c.renderer);
     c.fullscreen = flag("Display", "fullscreen", c.fullscreen);
     c.resolution = num("Display", "resolution", c.resolution, 0, 10);
+    c.resolution_percent = num("Display", "resolution_percent", c.resolution_percent, 0, 1800);
+    if (c.resolution_percent > 0 && c.resolution_percent < 50) {
+        c.resolution_percent = 50; // AzaharPlus's smallest step
+    }
     c.vsync = flag("Display", "vsync", c.vsync);
     c.accurate_mul = flag("Display", "accurate_mul", c.accurate_mul);
     c.screens = str("Display", "screens", c.screens);
@@ -134,7 +138,6 @@ Config Load() {
                           : (m == "lighter" || IsOn(m)) ? "lighter" : "off";
     }
     c.vk_flush_draws = num("Display", "vk_flush_draws", c.vk_flush_draws, 0, 1000);
-    c.frame_interp_stats = flag("Display", "frame_interp_stats", c.frame_interp_stats);
     c.builtin_cheats = flag("Display", "builtin_cheats", c.builtin_cheats);
     c.custom_layout = str("Display", "custom_layout", c.custom_layout);
     c.custom_layout_portrait = str("Display", "custom_layout_portrait", c.custom_layout_portrait);
@@ -269,6 +272,9 @@ renderer = {}
 fullscreen = {}
 # internal resolution in multiples of the 3DS's (1-10); 0 = as many as the window needs
 resolution = {}
+# Android: AzaharPlus's fractional scaling, the internal resolution in percent of the 3DS's (150 =
+# 1.5x, 250 = 2.5x; 50 to 1800 in steps of 50). When set it is used instead of `resolution`
+resolution_percent = {}
 vsync = {}
 # overlay: the game fills the window and the touch screen sits over it in a corner (mh4u.ini's
 #          touch_overlay and touch_screen say where and when; F12 or the right stick's click
@@ -308,9 +314,6 @@ aot_fewer_unwinds = {}
 vk_no_storage = {}
 # draws in a render pass before it is flushed on Mali/Qualcomm; 0 = Azahar's default (20)
 vk_flush_draws = {}
-# frame interpolation analysis (needs the Azahar patch 0007): log how well each draw matches the
-# last frame's; nothing is drawn from it
-frame_interp_stats = {}
 # the custom screen layout (the layout editor writes these): x,y,width,height of the top screen,
 # then of the bottom one, in pixels of the game window
 custom_layout = {}
@@ -389,11 +392,11 @@ last_room = {}
 # from here when the launcher starts (empty: never; the copy that came with the app is used)
 catalog_url = {}
 )",
-                       c.game, OnOff(c.launcher), c.new_3ds, c.cpu_clock, c.renderer, OnOff(c.fullscreen), c.resolution,
+                       c.game, OnOff(c.launcher), c.new_3ds, c.cpu_clock, c.renderer, OnOff(c.fullscreen), c.resolution, c.resolution_percent,
                        OnOff(c.vsync), c.screens, OnOff(c.linear_filter), OnOff(c.custom_textures),
                        c.shader, c.fps_counter, OnOff(c.accurate_mul), OnOff(c.async_shaders),
                        OnOff(c.disk_shader_cache), OnOff(c.skip_duplicate_frames), c.texture_filter,
-                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, OnOff(c.frame_interp_stats), c.custom_layout, c.custom_layout_portrait, OnOff(c.builtin_cheats), c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.audio_driver, c.audio_emulation, OnOff(c.audio_stretching), OnOff(c.audio_realtime), OnOff(c.headphones), c.audio_input, c.sound_mode, c.controller_auto ? "auto" : "off", keys,
+                       c.texture_sampling, OnOff(c.disable_right_eye), OnOff(c.aot_skip_idle), OnOff(c.aot_fewer_unwinds), c.vk_no_storage, c.vk_flush_draws, c.custom_layout, c.custom_layout_portrait, OnOff(c.builtin_cheats), c.cpu_affinity, OnOff(c.adreno_boost), c.gpu_driver, c.volume, c.audio_output, c.audio_driver, c.audio_emulation, OnOff(c.audio_stretching), OnOff(c.audio_realtime), OnOff(c.headphones), c.audio_input, c.sound_mode, c.controller_auto ? "auto" : "off", keys,
                        params, c.touch_screen_key, c.fullscreen_key, c.fps_counter_key, c.nickname, c.join, c.password,
                        c.host, c.room_port, c.room_name, c.room_members, c.lobby, c.token,
                        OnOff(c.room_public), c.last_room, c.catalog_url);
@@ -435,7 +438,6 @@ void Apply(const Config& c) {
     SyncEnv("AZAHAR_VK_NO_STORAGE", c.vk_no_storage == "lighter" ? "1" : c.vk_no_storage == "shadows" ? "2" : nullptr);
     const std::string flush_draws = std::to_string(c.vk_flush_draws);
     SyncEnv("AZAHAR_VK_FLUSH_DRAWS", c.vk_flush_draws > 0 ? flush_draws.c_str() : nullptr);
-    SyncEnv("AZAHAR_FRAME_INTERP", c.frame_interp_stats ? "1" : nullptr);
     // the custom layout and the touch overlay both use the custom frame: the overlay stands aside
     SyncEnv("MH4U_TOUCH_OVERLAY", c.screens == "custom" ? "off" : nullptr);
     SyncEnv("AZAHAR_CUBEB_BACKEND", c.audio_driver == "aaudio" ? "aaudio" : c.audio_driver == "opensl" ? "opensl" : nullptr);

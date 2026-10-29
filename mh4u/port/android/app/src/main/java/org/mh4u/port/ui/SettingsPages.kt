@@ -243,9 +243,18 @@ fun DisplayPage() = Page {
 
     SectionTitle("Picture")
     Panel {
-        var res by remember { mutableStateOf(Prefs.getInt("Display", "resolution", 2).toFloat()) }
-        SliderRow("Internal resolution", "In multiples of the 3DS resolution. 0 matches the screen.", res, 0f..6f, " ×", steps = 5) {
-            res = it; Prefs.setApp("Display", "resolution", it.toInt().toString()); Prefs.apply()
+        // AzaharPlus's fractional scaling: the resolution in percent of the 3DS's, in halves (150 =
+        // 1.5×). The whole multiple is written too, for whatever reads the file the old way.
+        val savedPercent = Prefs.getInt("Display", "resolution_percent", 0)
+        var res by remember {
+            mutableStateOf(if (savedPercent > 0) savedPercent / 100f else Prefs.getInt("Display", "resolution", 2).toFloat())
+        }
+        SliderRow("Internal resolution", "In multiples of the 3DS resolution, in halves (1.5×, 2.5×…). 0 matches the screen.", res, 0f..6f, " ×", steps = 11) {
+            res = it
+            val percent = Math.round(it * 2f) * 50
+            Prefs.setApp("Display", "resolution_percent", percent.toString())
+            Prefs.setApp("Display", "resolution", (if (percent == 0) 0 else Math.max(1, Math.round(percent / 100f))).toString())
+            Prefs.apply()
         }
         RowDivider()
         var filter by remember { mutableStateOf(Prefs.getBool("Display", "linear_filter", true)) }
@@ -312,11 +321,6 @@ fun DisplayPage() = Page {
         ChoiceRow("Pass flush threshold", "Number of draw calls in a render pass before it is submitted to the GPU (Adreno and Mali). Results vary by device, so compare on your phone. Applies on the next game start.",
             listOf("Default (20)" to "0", "8" to "8", "40" to "40", "100" to "100"), flushDraws) {
             flushDraws = it; Prefs.setApp("Display", "vk_flush_draws", it)
-        }
-        RowDivider()
-        var interpStats by remember { mutableStateOf(Prefs.getBool("Display", "frame_interp_stats", false)) }
-        ToggleRow("Frame interpolation analysis (log only)", "Experimental. Checks how well each draw lines up with the previous frame's and writes a summary to the log every few seconds. It draws nothing and changes nothing you see; it costs a little CPU. Applies on the next game start.", interpStats) {
-            interpStats = it; Prefs.setBool("Display", "frame_interp_stats", it)
         }
         RowDivider()
         var affinity by remember { mutableStateOf(Prefs.getApp("Display", "cpu_affinity", "default")) }

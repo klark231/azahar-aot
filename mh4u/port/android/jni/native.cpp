@@ -368,9 +368,11 @@ void ApplyConfig(const App::Config& config) {
                                                     : AudioCore::InputType::Auto;
     // built-in cheats are added when the game's cheat file is loaded, so this is read at start
     Cheats::GatewayCheat::SetBuiltInEnabled(config.builtin_cheats);
-    // this Azahar counts the internal resolution in percent (100: native); the app's ini in
-    // multiples of the 3DS's, 0 meaning from the screen
-    v.resolution_factor = static_cast<u32>(config.resolution * 100);
+    // this Azahar counts the internal resolution in percent (100: native) and scales by any
+    // fraction (AzaharPlus). The app's ini has the percent in resolution_percent, or whole
+    // multiples of the 3DS's in resolution; 0 meaning from the screen
+    v.resolution_factor = static_cast<u32>(config.resolution_percent > 0 ? config.resolution_percent
+                                                                         : config.resolution * 100);
     // layouts the PC app doesn't have (Azahar's own names)
     if (config.screens == "large") {
         v.layout_option = Settings::LayoutOption::LargeScreen;
